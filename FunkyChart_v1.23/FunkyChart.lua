@@ -1,0 +1,1 @@
+loadstring(game:HttpGet('https://raw.githubusercontent.com/accountrev/funkychart/main/GUI/FunkyChartGUI.lua'))()
