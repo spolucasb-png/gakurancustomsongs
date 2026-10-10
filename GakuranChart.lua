@@ -977,12 +977,34 @@ local svRenderConn = nil    -- persistent RenderStepped connection, made ONCE at
 local svLastRun = 0        -- os.clock() of last handler invocation
 local svLastWrites = 0     -- note writes performed in that run
 
+-- SV-aware spawn extension (pop-in fix). The engine spawns notes on TIME
+-- (spawn = t - lead) but SV repositions them by integral distance, so at
+-- rate r a note appears r * (edge distance) from the receptors - for
+-- r < ~0.78 it pops in mid-playfield instead of sliding in. We rewrite
+-- each note's .spawn to the earlier time when its SV distance equals the
+-- visible distance; fast-SV regions keep vanilla spawns via min().
+local svSpawnMaxLead = 5    -- max seconds a spawn may move earlier than vanilla
+local svSpawnMargin = 0.1    -- extra SV-seconds of distance beyond the screen edge
+local svSpawnCap = 400       -- max simultaneously live notes (note pool max is 512)
+local svSpawnId = nil        -- song id spawns were computed for
+local svSpawnLead = nil      -- sess._spawnLead at compute time
+local svSpawnNotes = nil     -- sess._liveNotes table identity at compute time
+local svSpawnExt = 0         -- notes spawned earlier than vanilla (diagnostic)
+local svSpawnCapped = 0      -- notes clamped by the concurrency cap (diagnostic)
+local svSpawnOrderFix = 0    -- order-guard repairs (diagnostic; >0 only with cap cascades)
+
 local function stopSv()
     -- Drops the current model; the bound frame hook rebuilds lazily for
     -- the next custom session. The binding lives until cleanup.
     svModel = nil
     svModelId = nil
     svFrameErrors = 0
+    svSpawnId = nil
+    svSpawnLead = nil
+    svSpawnNotes = nil
+    svSpawnExt = 0
+    svSpawnCapped = 0
+    svSpawnOrderFix = 0
 end
 
 -- Piecewise integral of the scroll rate; I(t) = t (implicit rate 1)
@@ -1045,6 +1067,121 @@ local function buildSvModel(chart, song)
     return { pts = pts, rates = rates, prefix = prefix }
 end
 
+-- Invert the piecewise-linear integral: largest ts with I(ts) <= V.
+-- Rates are clamped to [0.05, 20], so I is strictly increasing and the
+-- inverse is unique. Mirrors svIntegral's implicit rate-1 region before
+-- the first change point.
+local function svInvertIntegral(m, V)
+    local pts = m.pts
+    local n = #pts
+    if V <= pts[1] then
+        return V
+    end
+    local lo, hi = 1, n -- largest i with prefix[i] <= V
+    while lo < hi do
+        local mid = (lo + hi + 1) // 2
+        if m.prefix[mid] <= V then
+            lo = mid
+        else
+            hi = mid - 1
+        end
+    end
+    return pts[lo] + (V - m.prefix[lo]) / m.rates[lo]
+end
+
+-- Rewrite per-note .spawn times so slow-SV notes exist before they become
+-- visible. Target: the time ts with I(ts) = I(t) - D/S, where D is the
+-- visible SV-distance derived from the engine's own lead
+-- (lead = min(approach, (distToEdge + noteSize)/S + 0.15), so
+-- (lead - 0.15)*S is the exact edge distance whenever lead < approach).
+--   spawn = max(t - maxLead, min(t - lead, ts))
+-- min() keeps fast-SV regions (and flat-rate charts) exactly vanilla.
+-- Ordering: t - maxLead, t - lead and ts(t) are all non-decreasing in t
+-- (dts/dt = rate(t)/rate(ts) > 0), and the engine keeps _liveNotes in t
+-- order, so the rewritten list stays sorted - required by the spawn
+-- loop's break-on-first-not-due and by lowerBoundSpawn. We never re-sort:
+-- _nextSpawn is an index into this array. The concurrency pass below only
+-- ever pushes spawns later and each note is also clamped to the previous
+-- note's final spawn, so sortedness holds by construction; violations are
+-- counted, not tolerated.
+-- Runs from the persistent frame (after the engine's step each frame):
+-- once per session, and again whenever the engine overwrites .spawn,
+-- detected via _spawnLead value or _liveNotes identity (_refreshSpawnLead
+-- runs every step but early-outs without writing when the lead is
+-- unchanged; _rebuildLiveNotes replaces the table). Only for sessions
+-- with an SV model; charts without scrollChanges return before any write.
+local function svApplySpawns(sess, m, S)
+    local live = sess._liveNotes
+    if type(live) ~= "table" then return end
+    local id = svModelId
+    local lead = sess._spawnLead
+    if type(lead) ~= "number" or lead <= 0 then return end
+    if svSpawnId == id and svSpawnLead == lead and svSpawnNotes == live then
+        return -- clean: engine did not rewrite spawns this frame
+    end
+    local n = #live
+    svSpawnId, svSpawnLead, svSpawnNotes = id, lead, live
+    svSpawnExt, svSpawnCapped, svSpawnOrderFix = 0, 0, 0
+    if n == 0 then return end
+    local D = S * (lead - 0.15) + S * svSpawnMargin
+    if D <= 0 then D = S * 0.05 end
+    -- ends[]: release times of the placed window, ascending (head pointer
+    -- instead of table.remove churn). A placed note counts as live until
+    -- t + len + 0.2s (holds stay live to their end; +0.2 covers the hit
+    -- window so the cap estimate never undercounts pool use).
+    local ends = {}
+    local head = 1
+    local prev = -1e18
+    for i = 1, n do
+        local note = live[i]
+        local t = note.t
+        if type(t) ~= "number" then
+            -- Malformed entry (engine notes always carry t): leave its spawn
+            -- alone but track it for ordering. Never throw here.
+            local kept = note.spawn
+            if type(kept) == "number" and kept > prev then prev = kept end
+        else
+            local vanilla = t - lead
+            local ts = svInvertIntegral(m, svIntegral(m, t) - D / S)
+            local s = vanilla
+            if ts < s then s = ts end
+            local floor = t - svSpawnMaxLead
+            if s < floor then s = floor end
+            if s < vanilla - 1e-9 then svSpawnExt += 1 end
+            if s < prev - 1e-9 then
+                s = prev
+                svSpawnOrderFix += 1
+            elseif s < prev then
+                s = prev -- float dust; don't count it
+            end
+            while head <= #ends and ends[head] <= s do
+                head += 1
+            end
+            local pushed = false
+            while (#ends - head + 1) >= svSpawnCap do
+                s = ends[head]
+                pushed = true
+                head += 1
+                while head <= #ends and ends[head] <= s do
+                    head += 1
+                end
+            end
+            if pushed then svSpawnCapped += 1 end
+            if s < prev then s = prev end -- cap pushes only move later; keep sorted
+            local len = note.len
+            local rel = t + (if type(len) == "number" then len else 0) + 0.2
+            local j = #ends
+            while j >= head and ends[j] > rel do
+                ends[j + 1] = ends[j]
+                j -= 1
+            end
+            ends[j + 1] = rel
+            note.spawn = s
+            prev = s
+        end
+    end
+end
+
 local svPerspectiveWarned = false   -- warn once per loader instance while blocked
 
 local function svApplyFrameInner()
@@ -1082,6 +1219,15 @@ local function svApplyFrameInner()
                 .. "(the engine re-derives note positions itself)")
         end
         return
+    end
+    -- SV-aware spawn extension (pop-in fix): same frame pass, after the
+    -- engine's step, so engine overwrites of .spawn are re-applied the
+    -- same frame. No-op for flat-rate charts (min() keeps vanilla) and
+    -- never runs without a model (early return above), so non-SV charts
+    -- keep byte-identical spawn behavior.
+    local Sp = sess._scrollPxPerSec
+    if type(Sp) == "number" and Sp > 0 then
+        svApplySpawns(sess, m, Sp)
     end
     local view = sess._view
     if type(view) ~= "table" then return end
@@ -1684,6 +1830,9 @@ _G.GakuranChart = {
             points = svModel and #svModel.pts or 0,
             sessionCustom = id ~= nil and customIds[id] == true or false,
             perspective = type(sess) == "table" and sess._perspective == true or false,
+            spawnExtended = svSpawnExt,
+            spawnCapped = svSpawnCapped,
+            spawnOrderFix = svSpawnOrderFix,
         }
     end,
     -- Introspection for the console: is the skin visual pass alive?
