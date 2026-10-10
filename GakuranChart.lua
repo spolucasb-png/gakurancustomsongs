@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v1.2
+    GakuranChart v1.3
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -7,6 +7,8 @@
       - Custom charts are JSON files in  GakuranCharts/Charts  (executor workspace)
       - Audio/images live in            GakuranCharts/Audio / GakuranCharts/Assets
       - osu!mania skin packs live in    GakuranCharts/Skins (tools/osu2skin.py)
+        and apply GLOBALLY while the loader runs: our Play button and the
+        game's own stage plays all get the skin (restore on loader removal).
       - On Play, the chart is injected into the game's own RhythmSongRegistry
         and the official RhythmServiceClient:StartPlay() runs it through the
         real engine (countdown, highway, judging, results).
@@ -22,7 +24,7 @@ local RS = game:GetService("ReplicatedStorage")
 local CoreGui = game:GetService("CoreGui")
 
 local player = Players.LocalPlayer
-local VERSION = "1.2"
+local VERSION = "1.3"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -742,28 +744,17 @@ local function playChart()
     -- Start fresh: don't carry stats from a previous play of this song.
     pcall(function() service._carryOverStats = nil end)
 
-    -- Apply the selected osu!mania skin before the view is constructed
-    -- (StartPlay builds the highway from the current theme).
-    -- Re-read the manifest from disk every play so edited/regenerated packs
-    -- are picked up without re-executing the loader.
-    local skinApplied = false
-    local skinMan = findSelectedSkin()
-    if skinMan then
-        local okS = pcall(activateSkin, skinMan)
-        skinApplied = okS and skinState ~= nil
-        if not skinApplied then
-            warn("[GakuranChart] Skin '" .. tostring(skinMan.name) .. "' failed to apply; using game default")
-        end
-    else
-        deactivateSkin()
-    end
+    -- The selected skin is applied GLOBALLY at loader start / on dropdown
+    -- change: activateSkin wraps StoredToViewTheme, which every highway
+    -- construction goes through - our Play button AND real stage plays.
+    -- Here we only report the active skin for the "Now playing" toast.
+    local skinApplied = skinState ~= nil
 
     local okP, playErr = pcall(function()
         service:StartPlay(song.id, song.mode or currentChart.mode, { showCountdown = true })
     end)
     if not okP then
         notify("Play failed", tostring(playErr), true)
-        deactivateSkin()
         restoreAttributes()
         destroyUnderframe()
         return
@@ -782,7 +773,7 @@ local function stopChart()
     pcall(function() service:Stop({ fadeOut = true }) end)
     -- Prevent score carry-over into the next play of this song.
     pcall(function() service._carryOverStats = nil end)
-    deactivateSkin()
+    -- NOTE: the skin stays active - it is global for the loader's lifetime.
     restoreAttributes()
     destroyUnderframe()
     if playStatusCallback then playStatusCallback("Stopped") end
@@ -823,7 +814,6 @@ task.spawn(function()
             if _G.GakuranChartGen ~= MYGEN then return end
             local okP3, playing3 = pcall(function() return service:IsPlaying() end)
             if not (okP3 and playing3) then
-                deactivateSkin()
                 restoreAttributes()
                 destroyUnderframe()
                 if playStatusCallback and not stopRequested then
@@ -1022,22 +1012,36 @@ do
         settings.skin = ""
     end
     skinDropdown = TabOpt:CreateDropdown({
-        Name = "Note skin (applies on play)",
+        Name = "Note skin (applies everywhere while loaded)",
         Options = skinNames,
         CurrentOption = initial,
         MultiSelection = false,
         Callback = function(option)
             local name = type(option) == "table" and option[1] or option
-            if name == "Game default" then
-                settings.skin = ""
-                selectedSkinManifest = nil
-            elseif skinByName[name] then
-                settings.skin = name
-                selectedSkinManifest = skinByName[name]
-            end
+            local okA, errA = pcall(function()
+                if name == "Game default" then
+                    settings.skin = ""
+                    selectedSkinManifest = nil
+                    deactivateSkin()
+                elseif skinByName[name] then
+                    settings.skin = name
+                    selectedSkinManifest = skinByName[name]
+                    activateSkin(skinByName[name])
+                end
+            end)
+            if not okA then notify("Skin error", tostring(errA), true) end
             saveSettings()
         end,
     })
+end
+-- Apply the selected skin NOW: the StoredToViewTheme wrap injects it into
+-- every highway the game builds (our Play button and real stage plays
+-- alike) until the loader is removed.
+if selectedSkinManifest then
+    local okS, errS = pcall(activateSkin, selectedSkinManifest)
+    if not okS or not skinState then
+        warn("[GakuranChart] Skin '" .. tostring(settings.skin) .. "' failed to activate: " .. tostring(errS))
+    end
 end
 TabOpt:CreateButton({
     Name = "Refresh skin list",
@@ -1051,7 +1055,14 @@ TabOpt:CreateButton({
                 skinByName[man.name] = man
             end
             skinDropdown:Refresh(skinNames)
-            notify("Skins", #skinPacks .. " pack(s) found in " .. SKINS_DIR)
+            if settings.skin ~= "" and skinByName[settings.skin] then
+                -- re-apply so freshly regenerated packs load without a re-exec
+                selectedSkinManifest = skinByName[settings.skin]
+                pcall(activateSkin, selectedSkinManifest)
+                notify("Skins", #skinPacks .. " pack(s), skin re-applied")
+            else
+                notify("Skins", #skinPacks .. " pack(s) found in " .. SKINS_DIR)
+            end
         end)
         if not okR then notify("Refresh error", tostring(errR), true) end
     end,
@@ -1091,8 +1102,11 @@ _G.GakuranChartCleanup = function()
         pcall(function() service._carryOverStats = nil end)
         playing = false
     end
+    -- Always restore the skin baseline (even if a play is active): the
+    -- wrap + shape write are client-side only and the next loader instance
+    -- re-applies its own selection right after this cleanup runs.
+    pcall(deactivateSkin)
     if not playing then
-        pcall(deactivateSkin)
         pcall(restoreAttributes)
         pcall(destroyUnderframe)
     end
@@ -1119,11 +1133,13 @@ _G.GakuranChart = {
         if name == nil or name == "" or name == "Game default" then
             settings.skin = ""
             selectedSkinManifest = nil
+            deactivateSkin()
         else
             for _, man in ipairs(listSkinPacks()) do
                 if man.name == name then
                     settings.skin = name
                     selectedSkinManifest = man
+                    pcall(activateSkin, man)
                     saveSettings()
                     return name
                 end

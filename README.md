@@ -101,10 +101,12 @@ _G.GakuranChart.skins()                                  -- list installed skin 
 _G.GakuranChart.setSkin("My Skin")                       -- select a skin ("" = default)
 ```
 
-## osu!mania skins (v1.2)
+## osu!mania skins (v1.3)
 
-Convert any osu! skin into a Gakuran skin pack and select it in the Options tab
-(applies on play, local-only, restored after the session):
+Convert any osu! skin into a Gakuran skin pack and select it in the Options tab.
+The skin applies **globally while the loader runs** — our Play button *and* the
+game's own stage plays (walk up to a real keyboard) — and is restored when the
+loader is removed or the skin is set back to "Game default":
 
 ```
 python tools/osu2skin.py "C:/Users/<you>/AppData/Local/osu!/Skins/MySkin" ^
