@@ -18,5 +18,9 @@
     "lane": 2
   },
   "headHold": "headHold.png",
-  "receptorPressed": "receptorPressed.png"
+  "receptorPressed": "receptorPressed.png",
+  "taps": {
+    "1": "tap1.png",
+    "4": "tap4.png"
+  }
 }

@@ -8,6 +8,9 @@ GakuranCharts/Skins/<slug>/ pack:
 
     head.png       tap note image (single image for all lanes)
     headHold.png   optional: long-note head (skin.ini NoteImage<n>H)
+    tap<n>.png     optional: per-lane tap art for lanes whose NoteImage<n>
+                   differs from the base lane (e.g. outer `lefto` vs inner
+                   `left`); other lanes fall back to head.png (manifest.taps)
     receptor.png   receptor (key) image
     receptorPressed.png  optional: pressed receptor (skin.ini KeyImage<n>D)
     tail.png       composited long-note sprite: body + end cap,
@@ -432,6 +435,21 @@ def main():
         res = fit_optional(receptor_down_path, "pressed receptor", rec_src)
         if res:
             receptor_down_out, receptor_down_note = res
+
+    # Per-lane tap variants (e.g. outer lanes use `lefto` while the base
+    # lane uses `left`). Only lanes whose source file differs from the base
+    # lane's get their own sprite, framed like the base head so lanes never
+    # visibly jump in size. Keys are 1-based lane numbers (the engine's).
+    lane_taps = {}
+    for j in range(keys):
+        lj_ref = mania.get(f"NoteImage{j}", "").strip()
+        lj_path = resolve_ref(skin_dir, lj_ref) if lj_ref else None
+        if not lj_path:
+            lj_path = ci_lookup(skin_dir, f"mania-note{min(j + 1, 10)}")
+        if lj_path and not same_file(lj_path, head_path):
+            res = fit_optional(lj_path, f"lane {j + 1} tap", head_src)
+            if res:
+                lane_taps[j + 1] = res
     bw, bh, body_px = png_decode(open(body_path, "rb").read())
 
     # Composite tail sprite: [cap][body][cap-flipped].
@@ -476,13 +494,20 @@ def main():
         f.write(rec_out)
     with open(os.path.join(out_dir, "tail.png"), "wb") as f:
         f.write(png_encode(bw, canvas_h, canvas))
-    for fname, data in (("headHold.png", hold_head_out), ("receptorPressed.png", receptor_down_out)):
+    wanted = {"head.png", "receptor.png", "tail.png", "manifest.json"}
+    for fname, data in (("headHold.png", hold_head_out), ("receptorPressed.png", receptor_down_out),
+                        *((f"tap{lane}.png", png) for lane, (png, _note) in sorted(lane_taps.items()))):
         target = os.path.join(out_dir, fname)
+        wanted.add(fname)
         if data is not None:
             with open(target, "wb") as f:
                 f.write(data)
         elif os.path.isfile(target):
             os.remove(target)  # stale extra from an earlier run of this pack
+    # stale per-lane taps from an earlier run (lane art since unified)
+    for entry in os.listdir(out_dir):
+        if entry.startswith("tap") and entry.endswith(".png") and entry not in wanted:
+            os.remove(os.path.join(out_dir, entry))
 
     manifest = {
         "name": name,
@@ -499,6 +524,8 @@ def main():
         manifest["headHold"] = "headHold.png"
     if receptor_down_out is not None:
         manifest["receptorPressed"] = "receptorPressed.png"
+    if lane_taps:
+        manifest["taps"] = {str(lane): f"tap{lane}.png" for lane in sorted(lane_taps)}
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
 
@@ -508,6 +535,12 @@ def main():
     print(f"head:    {os.path.basename(head_path)} ({hw}x{hh})")
     print(f"holdhead:{os.path.basename(head_hold_path) + ' (' + hold_head_note + ')' if hold_head_out is not None else '-'}")
     print(f"pressed: {os.path.basename(receptor_down_path) + ' (' + receptor_down_note + ')' if receptor_down_out is not None else '-'}")
+    if lane_taps:
+        for lane in sorted(lane_taps):
+            _png, note = lane_taps[lane]
+            print(f"tap{lane}:   lane {lane} ({note})")
+    else:
+        print("taps:    - (all lanes share the base head)")
     print(f"receptor:{os.path.basename(receptor_path)}")
     print(f"tail:    body {bw}x{bh}" + (f" + caps {cap_h}px each" if cap_px else "") + f" -> {bw}x{canvas_h}, slice [{bw // 2 - 1}, {slice_y1}, {bw // 2 + 1}, {slice_y2}]")
 
