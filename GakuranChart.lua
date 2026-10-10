@@ -691,8 +691,10 @@ local function playChart()
 
     -- Apply the selected osu!mania skin before the view is constructed
     -- (StartPlay builds the highway from the current theme).
+    -- Re-read the manifest from disk every play so edited/regenerated packs
+    -- are picked up without re-executing the loader.
     local skinApplied = false
-    local skinMan = selectedSkinManifest or findSelectedSkin()
+    local skinMan = findSelectedSkin()
     if skinMan then
         local okS = pcall(activateSkin, skinMan)
         skinApplied = okS and skinState ~= nil

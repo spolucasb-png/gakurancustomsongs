@@ -161,6 +161,14 @@ def resize_nearest(rgba: bytes, sw: int, sh: int, dw: int, dh: int) -> bytes:
     return out
 
 
+def flip_vertical(rgba: bytes, w: int, h: int) -> bytes:
+    out = bytearray(len(rgba))
+    stride = w * 4
+    for y in range(h):
+        out[(h - 1 - y) * stride:(h - y) * stride] = rgba[y * stride:(y + 1) * stride]
+    return out
+
+
 def alpha_bbox(rgba: bytes, w: int, h: int, threshold: int = 8):
     minx, miny, maxx, maxy = w, h, -1, -1
     for y in range(h):
@@ -346,21 +354,31 @@ def main():
     rec_out = png_encode(rw, rh, rec_px)
     bw, bh, body_px = png_decode(open(body_path, "rb").read())
 
-    # composite tail: body (full) + end cap at the bottom, all at body width
+    # Composite tail sprite: [cap][body][cap-flipped].
+    # RhythmView pins the tail label at the note center and flips its anchor
+    # per scroll direction ((0.5,1) growing up in downscroll, (0.5,0) growing
+    # down in upscroll), so the image's top/bottom ends swap meaning between
+    # directions - the end cap must therefore sit at BOTH ends (the game's
+    # own tail sprites are symmetric for the same reason). The body band in
+    # the middle is the SliceCenter stretch zone.
     canvas_h = bh
-    cap_w = cap_h = 0
+    cap_h = 0
     cap_px = None
+    slice_y1, slice_y2 = 0, max(1, bh)
     if cap_path:
         cap_w, cap_h, cap_px = png_decode(open(cap_path, "rb").read())
         if cap_w != bw:
             cap_px = resize_nearest(cap_px, cap_w, cap_h, bw, cap_h)
-            cap_w = bw
-        canvas_h = bh + cap_h
+        slice_y1, slice_y2 = cap_h, cap_h + bh
+        canvas_h = cap_h + bh + cap_h
+    row = bw * 4
     canvas = bytearray(bw * canvas_h * 4)
-    canvas[0:bw * bh * 4] = body_px
     if cap_px:
-        canvas[bw * bh * 4:bw * canvas_h * 4] = cap_px
-    slice_y2 = max(1, bh)  # stretch zone = body; cap stays fixed at the bottom
+        canvas[0:cap_h * row] = cap_px
+        canvas[cap_h * row:(cap_h + bh) * row] = body_px
+        canvas[(cap_h + bh) * row:(cap_h * 2 + bh) * row] = flip_vertical(cap_px, bw, cap_h)
+    else:
+        canvas[0:bh * row] = body_px
 
     # output pack
     name = args.name or general.get("Name") or os.path.basename(os.path.normpath(skin_dir))
@@ -384,7 +402,7 @@ def main():
         "tail": "tail.png",
         "tailW": bw,
         "tailH": canvas_h,
-        "slice": [bw // 2 - 1, 0, bw // 2 + 1, slice_y2],
+        "slice": [bw // 2 - 1, slice_y1, bw // 2 + 1, slice_y2],
         "source": {"skinDir": skin_dir, "keys": keys, "lane": lane},
     }
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
@@ -395,7 +413,7 @@ def main():
     print(f"shape:   {shape_key}")
     print(f"head:    {os.path.basename(head_path)} ({hw}x{hh})")
     print(f"receptor:{os.path.basename(receptor_path)}")
-    print(f"tail:    body {bw}x{bh}" + (f" + cap {cap_h}px" if cap_px else "") + f" -> {bw}x{canvas_h}")
+    print(f"tail:    body {bw}x{bh}" + (f" + caps {cap_h}px each" if cap_px else "") + f" -> {bw}x{canvas_h}, slice [{bw // 2 - 1}, {slice_y1}, {bw // 2 + 1}, {slice_y2}]")
 
 
 if __name__ == "__main__":

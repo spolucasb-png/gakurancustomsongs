@@ -5,12 +5,12 @@
   "receptor": "receptor.png",
   "tail": "tail.png",
   "tailW": 128,
-  "tailH": 97,
+  "tailH": 162,
   "slice": [
     63,
-    0,
     65,
-    32
+    65,
+    97
   ],
   "source": {
     "skinDir": "C:\\Users\\Administrator\\AppData\\Local\\osu!\\Skins\\- !       NC Skin ~[Svnth's Edit!]~",
