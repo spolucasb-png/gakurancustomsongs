@@ -715,16 +715,17 @@ local playStatusCallback = nil   -- set by UI to update a status label
 --   hitY +/- (I(t) - I(now)) * scrollPxPerSec,   I' = rate.
 -- Judging stays time-based (we never touch it - SV is cosmetic).
 -- We recompute each active note's Y ABSOLUTELY every frame, using the
--- engine's own _now()/HitY()/_scrollPxPerSec. Attachment (verified with
--- a getconnections diff): the game binds its per-play RenderStepped
--- handlers DEFERRED - after StartPlay returns - so they always land
--- AFTER an attach made at play start, and their step overwrote us every
--- frame (RenderStepped dispatch order = bind order; BindToRenderStep
--- lost for the same reason). Fix: svApplyFrame re-attaches itself every
--- frame, moving our connection to the END of the list - we then always
--- run after the engine and our write is the final one, regardless of
--- when the game binds. The loader-lifetime attach (StartPlay wrap +
--- Heartbeat session watch) only establishes the initial connection.
+-- engine's own _now()/HitY()/_scrollPxPerSec.
+-- Ordering: our write must be the LAST one each frame. In the tested
+-- environment RenderStepped:Connect handlers dispatch NEWEST-FIRST (a
+-- controlled connect-A-then-B test fired B,A,B,A,B). The game connects
+-- its per-play handlers when StartPlay runs, i.e. AFTER the loader has
+-- initialized, so a connection the loader makes ONCE at init is OLDER
+-- than every engine play handler and therefore fires after them.
+-- attachSvRender() makes that single persistent connection during init
+-- (before the UI, whose construction can yield); it is idempotent and is
+-- never re-connected per frame or per play - a fresh Connect would be the
+-- newest, i.e. first, and the engine would overwrite us again.
 -- When nothing of ours is playing, the handler costs a couple of field
 -- reads and returns.
 -- Charts without scrollChanges build a nil model (no writes); flat
@@ -735,15 +736,9 @@ local svModelId = nil      -- song id the current model was built for
 local svRenderBound = false
 local svFrameErrors = 0
 local svDisabled = false   -- set after 60 frame errors (handler then no-ops)
-local svRenderConn = nil    -- RenderStepped connection (must bind AFTER the engine's)
-local svWatchConn = nil     -- Heartbeat watch that re-attaches per session
-local svWatchSession = nil  -- session the render conn was last attached for
-local svStartPlayOrig = nil
-local svStartPlayWrap = nil
-local svStartPlayWrapped = false
+local svRenderConn = nil    -- persistent RenderStepped connection, made ONCE at init (older than the engine's per-play ones => fires after them)
 local svLastRun = 0        -- os.clock() of last handler invocation
 local svLastWrites = 0     -- note writes performed in that run
-local svAttachedFor = nil  -- engine table whose _renderConn we attached after
 
 local function stopSv()
     -- Drops the current model; the bound frame hook rebuilds lazily for
@@ -907,23 +902,6 @@ end
 local function svApplyFrame()
     if svDisabled then return end
     local ok, err = pcall(svApplyFrameInner)
-    -- Stay LAST in the RenderStepped dispatch. The game binds its
-    -- per-play handlers (engine step, view, input) DEFERRED - after
-    -- StartPlay returns - so they always land AFTER an attach made at
-    -- play start, and their step overwrote our SV writes every frame.
-    -- Re-attaching from inside our own callback moves us to the end of
-    -- the connection list for the NEXT frame (connections added
-    -- mid-dispatch join on the following event), making our correction
-    -- the final word on note positions regardless of when the game
-    -- (re)binds. Gated on an active model so idle plays stay cheap.
-    if svModel ~= nil or svModelId ~= nil then
-        pcall(function()
-            if svRenderConn then
-                svRenderConn:Disconnect()
-            end
-            svRenderConn = RunService.RenderStepped:Connect(svApplyFrame)
-        end)
-    end
     if ok then
         svFrameErrors = 0
         return
@@ -938,19 +916,17 @@ local function svApplyFrame()
     end
 end
 
--- Attach our handler to RenderStepped so it is IN the dispatch list.
--- The game binds its per-play handlers (engine step etc.) DEFERRED, after
--- StartPlay returns, so an attach made at play start always lands BEFORE
--- them - static ordering can never win. svApplyFrame therefore
--- re-attaches itself every frame (see below), which pins our handler to
--- the END of the connection list for the next frame. RenderStepped
--- dispatches in bind order, so we then run last and our SV correction is
--- final. This function only gets us INTO the list; ordering is svApplyFrame's job.
+-- Make the ONE persistent RenderStepped connection for svApplyFrame.
+-- Idempotent: a live connection is kept as-is, never replaced, because a
+-- newer connection would dispatch BEFORE (and be overwritten by) the
+-- engine's per-play handlers (newest-first dispatch, see 5.8 header).
+-- Must run during loader init, before any StartPlay; the call sits right
+-- below, ahead of the UI section whose construction can yield.
 local function attachSvRender()
-    if svRenderConn then
-        pcall(function() svRenderConn:Disconnect() end)
-        svRenderConn = nil
-    end
+    local okC, alive = pcall(function()
+        return svRenderConn ~= nil and svRenderConn.Connected == true
+    end)
+    if okC and alive then return end
     local ok, conn = pcall(function()
         return RunService.RenderStepped:Connect(svApplyFrame)
     end)
@@ -958,73 +934,21 @@ local function attachSvRender()
         svRenderConn = conn
         svRenderBound = true
     else
+        svRenderBound = false
         warn("[GakuranChart] SV attach failed: " .. tostring(conn))
     end
 end
+attachSvRender()
 
--- Attachment lives for the loader's lifetime; playChart only pre-builds
--- the model (bindSv is idempotent).
-local function bindSv()
-    if svWatchConn then return end
-    -- Wrap service.StartPlay: every play path (loader Play button, song
-    -- wheel, stage) goes through it, so re-attaching right after it
-    -- returns guarantees our RenderStepped :Connect is bound AFTER the
-    -- engine's per-session handler.
-    if not svStartPlayWrapped and type(service.StartPlay) == "function" then
-        svStartPlayOrig = service.StartPlay
-        local orig = svStartPlayOrig
-        svStartPlayWrap = function(self, ...)
-            local r = orig(self, ...)
-            pcall(attachSvRender)
-            return r
-        end
-        pcall(function() service.StartPlay = svStartPlayWrap end)
-        svStartPlayWrapped = true
-    end
-    -- Fallback watch: catches session switches that bypass the wrap.
-    -- Attach runs on a Heartbeat, i.e. always after the frame in which
-    -- the session/engine appeared, so bind order still favors us.
-    local ok, conn = pcall(function()
-        return RunService.Heartbeat:Connect(function()
-            if svDisabled then return end
-            local sess = service._session
-            if sess ~= svWatchSession then
-                svWatchSession = sess
-                if type(sess) == "table" and not sess._destroyed then
-                    attachSvRender()
-                end
-            end
-        end)
-    end)
-    if ok then
-        svWatchConn = conn
-    else
-        warn("[GakuranChart] SV watch failed: " .. tostring(conn))
-    end
-end
-
+-- The connection lives for the loader's lifetime (cleanup disconnects it);
+-- playChart only pre-builds the model.
 local function unbindSv()
     stopSv()
     if svRenderConn then
         pcall(function() svRenderConn:Disconnect() end)
         svRenderConn = nil
     end
-    if svWatchConn then
-        pcall(function() svWatchConn:Disconnect() end)
-        svWatchConn = nil
-    end
-    svWatchSession = nil
     svRenderBound = false
-    if svStartPlayWrapped and svStartPlayOrig then
-        pcall(function()
-            if service.StartPlay == svStartPlayWrap then
-                service.StartPlay = svStartPlayOrig
-            end
-        end)
-    end
-    svStartPlayWrapped = false
-    svStartPlayWrap = nil
-    svStartPlayOrig = nil
 end
 
 local function playChart()
@@ -1107,13 +1031,12 @@ local function playChart()
         destroyUnderframe()
         return
     end
-    -- SV: make sure the lifetime frame hook is bound and pre-build the
-    -- model for this chart (idempotent; wheel/stage starts build theirs
-    -- lazily on the first frame instead).
+    -- SV: pre-build the model for this chart (the frame hook was already
+    -- connected at loader init; wheel/stage starts build theirs lazily on
+    -- the first frame instead).
     stopSv()
     local svCount = 0
     local okSv, svErr = pcall(function()
-        bindSv()
         local m = buildSvModel(currentChart, song)
         svModel = m
         svModelId = song.id
@@ -1537,10 +1460,6 @@ _G.GakuranChart = {
         return settings.skin
     end,
 }
-
--- Bind the SV frame hook for the loader's lifetime: applies to plays
--- started from the song wheel / stage too, not just our Play button.
-pcall(bindSv)
 
 -- List every custom chart in the game's song wheel right away (if enabled);
 -- the wheel refreshes from the registry on each open.
