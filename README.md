@@ -81,7 +81,11 @@ JSON, one file per chart in `GakuranCharts/Charts/`:
 
 - Audio offset (±500 ms)
 - Background/dim (uses the map's background image if present, else a solid color)
-- Show custom songs in the in-game song wheel (off by default)
+- Show custom songs in the in-game song wheel (off by default). All charts in
+  `GakuranCharts/Charts` are listed at loader start, when toggled on, and on
+  "Refresh chart list". The game's wheel filters by the instrument your
+  character holds — custom mania charts are Keyboard mode, so they appear
+  while holding a keyboard.
 
 ## Console API
 

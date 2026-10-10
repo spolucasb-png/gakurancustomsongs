@@ -374,9 +374,12 @@ def main():
     row = bw * 4
     canvas = bytearray(bw * canvas_h * 4)
     if cap_px:
-        canvas[0:cap_h * row] = cap_px
+        # The skin's cap art has its rounded edge toward the sprite's bottom;
+        # the hold-end side of the label (its TOP in downscroll) needs the
+        # flipped copy so both tips face outward. Verified in-game.
+        canvas[0:cap_h * row] = flip_vertical(cap_px, bw, cap_h)
         canvas[cap_h * row:(cap_h + bh) * row] = body_px
-        canvas[(cap_h + bh) * row:(cap_h * 2 + bh) * row] = flip_vertical(cap_px, bw, cap_h)
+        canvas[(cap_h + bh) * row:(cap_h * 2 + bh) * row] = cap_px
     else:
         canvas[0:bh * row] = body_px
 

@@ -394,6 +394,39 @@ local function injectSong(song)
     end
 end
 
+-- The game's song wheel rebuilds its list on every open from
+-- registry:List(), filtered to the instrument the character holds
+-- (hasPlayableChartForHeld: the song needs a non-empty charts[mode]).
+-- Our charts are Keyboard mode, so they show up while a keyboard is
+-- equipped. injectSong previously only ran when a chart was PLAYED,
+-- so the wheel never listed anything else - inject them all instead.
+local function injectAllCharts()
+    if not settings.showInWheel then return 0 end
+    local count = 0
+    for _, path in ipairs(listChartFiles()) do
+        local okR, chart = pcall(readChart, path)
+        if okR and type(chart) == "table" and type(chart.id) == "string" then
+            local okB, song = pcall(buildGameSong, chart)
+            if okB and song then
+                pcall(injectSong, song)
+                count += 1
+            end
+        end
+    end
+    return count
+end
+
+local function removeFromWheel()
+    local list = service._registry and service._registry._list
+    if type(list) ~= "table" then return end
+    for i = #list, 1, -1 do
+        local entry = list[i]
+        if type(entry) == "table" and customIds[entry.id] then
+            table.remove(list, i)
+        end
+    end
+end
+
 ----------------------------------------------------------------
 -- 5.5 Audio length cache
 -- The engine computes the session duration by probing the sound
@@ -857,6 +890,9 @@ Tab:CreateButton({
         local okR, errR = pcall(function()
             local opts = refreshChartList()
             chartDropdown:Refresh(opts)
+            if settings.showInWheel then
+                injectAllCharts()  -- pick up newly added chart files
+            end
             notify("Refreshed", #opts .. " chart(s) found")
         end)
         if not okR then notify("Refresh error", tostring(errR), true) end
@@ -935,6 +971,16 @@ TabOpt:CreateToggle({
     Callback = function(value)
         settings.showInWheel = value
         saveSettings()
+        local okI, errI = pcall(function()
+            if value then
+                local n = injectAllCharts()
+                notify("Song wheel", n .. " custom chart(s) listed (hold an instrument to see them)")
+            else
+                removeFromWheel()
+                notify("Song wheel", "Custom songs hidden from the wheel")
+            end
+        end)
+        if not okI then notify("Wheel error", tostring(errI), true) end
     end,
 })
 
@@ -1068,5 +1114,14 @@ _G.GakuranChart = {
         return settings.skin
     end,
 }
+
+-- List every custom chart in the game's song wheel right away (if enabled);
+-- the wheel refreshes from the registry on each open.
+if settings.showInWheel then
+    local okW, wheelCount = pcall(injectAllCharts)
+    if okW and wheelCount > 0 then
+        notify("Song wheel", wheelCount .. " custom chart(s) listed (hold an instrument to see them)")
+    end
+end
 
 notify("GakuranChart loaded", "Welcome " .. (player.DisplayName or player.Name))
