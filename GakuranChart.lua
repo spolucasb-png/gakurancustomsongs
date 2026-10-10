@@ -649,6 +649,26 @@ local function activateSkin(manifest)
                 vt.NoteImage = skinState.head
                 vt.ReceptorImage = skinState.receptor
                 vt.NoteShape = skinState.shapeKey
+                -- Original skin look: the highway normally multiplies sprites
+                -- with theme tints - hold bodies with LaneColors, outline
+                -- layers with NoteBorderColors, plus NoteBodyTransparency on
+                -- holds. Neutralize all of them while our skin runs so the
+                -- sprites render exactly as the skin drew them. Pressed
+                -- receptors keep the game-default light-gray flash (no theme
+                -- colors, still visible feedback).
+                local n = tonumber(lanes) or 4
+                for i = 1, n do
+                    if type(vt.LaneColors) == "table" then
+                        vt.LaneColors[i] = Color3.new(1, 1, 1)
+                    end
+                    if type(vt.NoteBorderColors) == "table" then
+                        vt.NoteBorderColors[i] = Color3.new(1, 1, 1)
+                    end
+                    if type(vt.ReceptorPressedColors) == "table" then
+                        vt.ReceptorPressedColors[i] = Color3.fromRGB(220, 220, 220)
+                    end
+                end
+                vt.NoteBodyTransparency = 0
             end
             return vt
         end
