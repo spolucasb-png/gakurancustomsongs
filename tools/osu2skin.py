@@ -1,0 +1,402 @@
+#!/usr/bin/env python3
+"""
+osu!mania skin -> GakuranChart skin pack converter.
+
+Reads an osu! skin folder (skin.ini [Mania] Keys:N section, lazer-style
+NoteImage*/KeyImage* references with stable-name fallback) and produces a
+GakuranCharts/Skins/<slug>/ pack:
+
+    head.png       tap note image (single image for all lanes)
+    receptor.png   receptor (key) image
+    tail.png       composited long-note sprite: body + end cap,
+                   drawn stretched by the engine via SliceCenter
+    manifest.json  asset names + tail sprite metrics
+
+Pure stdlib (no Pillow): PNG decode/encode for 8-bit RGB/RGBA palettes.
+
+Usage:
+    python tools/osu2skin.py "C:/path/to/osu skin" --out <workspace>/GakuranCharts/Skins
+                             [--keys 4] [--lane 2] [--name "My Skin"]
+"""
+
+import argparse
+import json
+import os
+import re
+import struct
+import sys
+import zlib
+
+
+# ---------------------------------------------------------------- PNG codec
+
+def png_decode(data: bytes):
+    """Return (width, height, rgba_bytes). 8-bit RGB/RGBA/palette, non-interlaced."""
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG file")
+    pos = 8
+    idat = bytearray()
+    plte = None
+    trns = None
+    w = h = None
+    bitdepth = colortype = interlace = None
+    while pos + 8 <= len(data):
+        (length,) = struct.unpack(">I", data[pos:pos + 4])
+        ctype = data[pos + 4:pos + 8]
+        chunk = data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if ctype == b"IHDR":
+            w, h, bitdepth, colortype, _comp, _filt, interlace = struct.unpack(">IIBBBBB", chunk)
+        elif ctype == b"PLTE":
+            plte = chunk
+        elif ctype == b"tRNS":
+            trns = chunk
+        elif ctype == b"IDAT":
+            idat += chunk
+        elif ctype == b"IEND":
+            break
+    if w is None:
+        raise ValueError("PNG missing IHDR")
+    if bitdepth != 8 or interlace != 0:
+        raise ValueError(f"unsupported PNG (bitdepth={bitdepth}, interlace={interlace})")
+    if colortype not in (0, 2, 3, 4, 6):
+        raise ValueError(f"unsupported PNG colortype {colortype}")
+
+    bpp = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[colortype]
+    stride = w * bpp
+    raw = zlib.decompress(bytes(idat))
+
+    # unfilter scanlines
+    lines = []
+    prev = bytearray(stride)
+    p = 0
+    for _y in range(h):
+        f = raw[p]
+        p += 1
+        line = bytearray(raw[p:p + stride])
+        p += stride
+        if f == 1:
+            for i in range(bpp, stride):
+                line[i] = (line[i] + line[i - bpp]) & 255
+        elif f == 2:
+            for i in range(stride):
+                line[i] = (line[i] + prev[i]) & 255
+        elif f == 3:
+            for i in range(stride):
+                a = line[i - bpp] if i >= bpp else 0
+                line[i] = (line[i] + ((a + prev[i]) >> 1)) & 255
+        elif f == 4:
+            for i in range(stride):
+                a = line[i - bpp] if i >= bpp else 0
+                b = prev[i]
+                c = prev[i - bpp] if i >= bpp else 0
+                pa = abs(b - c)
+                pb = abs(a - c)
+                pc = abs(a + b - 2 * c)
+                if pa <= pb and pa <= pc:
+                    pr = a
+                elif pb <= pc:
+                    pr = b
+                else:
+                    pr = c
+                line[i] = (line[i] + pr) & 255
+        elif f != 0:
+            raise ValueError(f"unknown PNG filter {f}")
+        lines.append(line)
+        prev = line
+
+    out = bytearray(w * h * 4)
+    for y, line in enumerate(lines):
+        o = y * w * 4
+        if colortype == 6:
+            out[o:o + w * 4] = line
+        elif colortype == 2:
+            for x in range(w):
+                out[o + x * 4:o + x * 4 + 3] = line[x * 3:x * 3 + 3]
+                out[o + x * 4 + 3] = 255
+        elif colortype == 0:
+            for x in range(w):
+                g = line[x]
+                out[o + x * 4:o + x * 4 + 4] = bytes((g, g, g, 255))
+        elif colortype == 4:
+            for x in range(w):
+                g = line[x * 2]
+                a = line[x * 2 + 1]
+                out[o + x * 4:o + x * 4 + 4] = bytes((g, g, g, a))
+        elif colortype == 3:
+            if plte is None:
+                raise ValueError("palette PNG missing PLTE")
+            for x in range(w):
+                idx = line[x]
+                out[o + x * 4:o + x * 4 + 3] = plte[idx * 3:idx * 3 + 3]
+                out[o + x * 4 + 3] = trns[idx] if (trns and idx < len(trns)) else 255
+    return w, h, out
+
+
+def png_encode(w: int, h: int, rgba: bytes) -> bytes:
+    def chunk(ctype: bytes, payload: bytes) -> bytes:
+        c = ctype + payload
+        return struct.pack(">I", len(payload)) + c + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
+
+    raw = bytearray()
+    stride = w * 4
+    for y in range(h):
+        raw.append(0)  # filter: none
+        raw += rgba[y * stride:(y + 1) * stride]
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 6))
+            + chunk(b"IEND", b""))
+
+
+def resize_nearest(rgba: bytes, sw: int, sh: int, dw: int, dh: int) -> bytes:
+    out = bytearray(dw * dh * 4)
+    for y in range(dh):
+        sy = min(sh - 1, y * sh // dh)
+        for x in range(dw):
+            sx = min(sw - 1, x * sw // dw)
+            s = (sy * sw + sx) * 4
+            d = (y * dw + x) * 4
+            out[d:d + 4] = rgba[s:s + 4]
+    return out
+
+
+def alpha_bbox(rgba: bytes, w: int, h: int, threshold: int = 8):
+    minx, miny, maxx, maxy = w, h, -1, -1
+    for y in range(h):
+        row = y * w * 4
+        for x in range(w):
+            if rgba[row + x * 4 + 3] > threshold:
+                if x < minx: minx = x
+                if x > maxx: maxx = x
+                if y < miny: miny = y
+                if y > maxy: maxy = y
+    if maxx < 0:
+        return None
+    return minx, miny, maxx + 1, maxy + 1
+
+
+def fit_to_frame(rgba: bytes, w: int, h: int, aspect: float = 1.0):
+    """Crop to the alpha bounding box and center on a canvas matching the
+    engine's frame aspect (the highway paints notes/receptors with ScaleType
+    Fit, so osu skins' oversized transparent canvases render tiny)."""
+    box = alpha_bbox(rgba, w, h)
+    if box is None:
+        return w, h, rgba
+    minx, miny, maxx, maxy = box
+    aw, ah = maxx - minx, maxy - miny
+    cropped = bytearray(aw * ah * 4)
+    for y in range(ah):
+        src = ((miny + y) * w + minx) * 4
+        cropped[y * aw * 4:(y + 1) * aw * 4] = rgba[src:src + aw * 4]
+    # target canvas: aspect (w/h) with the art at max dimension
+    if aw / max(1, ah) >= aspect:
+        cw, ch = aw, max(ah, int(round(aw / aspect)))
+    else:
+        ch, cw = ah, max(aw, int(round(ah * aspect)))
+    canvas = bytearray(cw * ch * 4)
+    ox, oy = (cw - aw) // 2, (ch - ah) // 2
+    for y in range(ah):
+        dst = ((oy + y) * cw + ox) * 4
+        canvas[dst:dst + aw * 4] = cropped[y * aw * 4:(y + 1) * aw * 4]
+    return cw, ch, canvas
+
+
+# ------------------------------------------------------------- skin.ini
+
+def parse_ini(path: str):
+    """Return list of (section_name, {key: value}); keeps duplicate sections."""
+    sections = []
+    cur = None
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.split("//")[0].split(";")[0].strip()
+            if not line:
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                cur = (line[1:-1].strip(), {})
+                sections.append(cur)
+            elif ":" in line and cur is not None:
+                k, v = line.split(":", 1)
+                cur[1][k.strip()] = v.strip()
+    return sections
+
+
+def pick_mania(sections, keys: int):
+    for name, kv in sections:
+        if name.lower() == "mania" and kv.get("Keys", "").strip() == str(keys):
+            return kv
+    for name, kv in sections:
+        if name.lower() == "mania":
+            return kv
+    return {}
+
+
+def ci_lookup(base: str, name: str, exts=(".png",)) -> str:
+    """Case-insensitive file lookup; prefers @2x variants."""
+    if not os.path.isdir(base):
+        return None
+    entries = {e.lower(): e for e in os.listdir(base)}
+    for ext in exts:
+        for candidate in (name + "@2x" + ext, name + ext, name.lower() + "@2x" + ext, name.lower() + ext):
+            real = entries.get(candidate.lower())
+            if real:
+                return os.path.join(base, real)
+    return None
+
+
+def resolve_ref(skin_dir: str, ref: str):
+    """Resolve a skin.ini image reference like '4K\\lefto' (no extension)."""
+    if not ref or ref.strip().lower() in ("blank", "none"):
+        return None
+    parts = ref.replace("/", "\\").split("\\")
+    cur = skin_dir
+    for part in parts[:-1]:
+        match = ci_lookup(cur, part, exts=("",))
+        if not match or not os.path.isdir(match):
+            # try as folder name case-insensitively
+            found = None
+            if os.path.isdir(cur):
+                for e in os.listdir(cur):
+                    if e.lower() == part.lower() and os.path.isdir(os.path.join(cur, e)):
+                        found = os.path.join(cur, e)
+                        break
+            if not found:
+                return None
+            cur = found
+        else:
+            cur = match
+    return ci_lookup(cur, parts[-1])
+
+
+# ------------------------------------------------------------------ main
+
+def main():
+    ap = argparse.ArgumentParser(description="Convert an osu!mania skin into a GakuranChart skin pack")
+    ap.add_argument("skin_dir", help="osu! skin folder (contains skin.ini)")
+    ap.add_argument("--out", required=True, help="output Skins directory")
+    ap.add_argument("--keys", type=int, default=4, help="key-count section to use (default 4)")
+    ap.add_argument("--lane", type=int, default=None,
+                    help="1-based lane for the tap/receptor image when lanes differ (default: middle lane)")
+    ap.add_argument("--aspect", type=float, default=1.0,
+                    help="width/height aspect the engine frame expects for head+receptor (default 1.0 = square)")
+    ap.add_argument("--name", default=None, help="display name (default: skin.ini Name)")
+    args = ap.parse_args()
+
+    skin_dir = args.skin_dir
+    ini_path = os.path.join(skin_dir, "skin.ini")
+    if not os.path.isfile(ini_path):
+        print(f"error: {ini_path} not found", file=sys.stderr)
+        sys.exit(1)
+
+    sections = parse_ini(ini_path)
+    mania = pick_mania(sections, args.keys)
+    general = next((kv for n, kv in sections if n.lower() == "general"), {})
+
+    keys = args.keys
+    lane = args.lane or (keys // 2 + keys % 2)  # 1-based middle lane
+    i = lane - 1
+
+    def mania_ref(*names):
+        for n in names:
+            if n in mania and mania[n].strip():
+                return mania[n].strip()
+        return None
+
+    head_ref = mania_ref(f"NoteImage{i}", f"NoteImage{i}H")
+    body_ref = mania_ref(f"NoteImage{i}L")
+    cap_ref = mania_ref(f"NoteImage{i}T")
+    receptor_ref = mania_ref(f"KeyImage{i}")
+
+    # stable-name fallbacks
+    head_path = resolve_ref(skin_dir, head_ref) if head_ref else None
+    if not head_path:
+        head_path = ci_lookup(skin_dir, f"mania-note{min(lane, 10)}")
+    receptor_path = resolve_ref(skin_dir, receptor_ref) if receptor_ref else None
+    if not receptor_path:
+        receptor_path = ci_lookup(skin_dir, f"mania-key{min(lane, 10)}")
+    body_path = resolve_ref(skin_dir, body_ref) if body_ref else None
+    cap_path = resolve_ref(skin_dir, cap_ref) if cap_ref else None
+
+    if not head_path:
+        print("error: could not resolve a tap-note image (skin.ini NoteImage*, mania-note*)", file=sys.stderr)
+        sys.exit(1)
+    if not receptor_path:
+        print("warning: no receptor image found, reusing the tap note image", file=sys.stderr)
+        receptor_path = head_path
+    if not body_path:
+        print("warning: no LN body image (NoteImage*L); holds will use the tap image as a plain bar", file=sys.stderr)
+        body_path = head_path
+    if not cap_path:
+        print("warning: no LN end cap (NoteImage*T); hold tails will have no end cap", file=sys.stderr)
+
+    with open(head_path, "rb") as f:
+        head_data = f.read()
+    with open(receptor_path, "rb") as f:
+        receptor_data = f.read()
+
+    # head + receptor: crop to the art's alpha bounding box and center on a
+    # frame-aspect canvas, otherwise Fit renders osu canvases tiny
+    hw, hh, head_px = png_decode(head_data)
+    hw, hh, head_px = fit_to_frame(head_px, hw, hh, args.aspect)
+    head_out = png_encode(hw, hh, head_px)
+
+    rw, rh, rec_px = png_decode(receptor_data)
+    rw, rh, rec_px = fit_to_frame(rec_px, rw, rh, args.aspect)
+    rec_out = png_encode(rw, rh, rec_px)
+    bw, bh, body_px = png_decode(open(body_path, "rb").read())
+
+    # composite tail: body (full) + end cap at the bottom, all at body width
+    canvas_h = bh
+    cap_w = cap_h = 0
+    cap_px = None
+    if cap_path:
+        cap_w, cap_h, cap_px = png_decode(open(cap_path, "rb").read())
+        if cap_w != bw:
+            cap_px = resize_nearest(cap_px, cap_w, cap_h, bw, cap_h)
+            cap_w = bw
+        canvas_h = bh + cap_h
+    canvas = bytearray(bw * canvas_h * 4)
+    canvas[0:bw * bh * 4] = body_px
+    if cap_px:
+        canvas[bw * bh * 4:bw * canvas_h * 4] = cap_px
+    slice_y2 = max(1, bh)  # stretch zone = body; cap stays fixed at the bottom
+
+    # output pack
+    name = args.name or general.get("Name") or os.path.basename(os.path.normpath(skin_dir))
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_").lower() or "skin"
+    shape_key = "GK_" + re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")
+    out_dir = os.path.join(args.out, slug)
+    os.makedirs(out_dir, exist_ok=True)
+
+    with open(os.path.join(out_dir, "head.png"), "wb") as f:
+        f.write(head_out)
+    with open(os.path.join(out_dir, "receptor.png"), "wb") as f:
+        f.write(rec_out)
+    with open(os.path.join(out_dir, "tail.png"), "wb") as f:
+        f.write(png_encode(bw, canvas_h, canvas))
+
+    manifest = {
+        "name": name,
+        "shapeKey": shape_key,
+        "head": "head.png",
+        "receptor": "receptor.png",
+        "tail": "tail.png",
+        "tailW": bw,
+        "tailH": canvas_h,
+        "slice": [bw // 2 - 1, 0, bw // 2 + 1, slice_y2],
+        "source": {"skinDir": skin_dir, "keys": keys, "lane": lane},
+    }
+    with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+
+    print(f"pack:    {out_dir}")
+    print(f"name:    {name}")
+    print(f"shape:   {shape_key}")
+    print(f"head:    {os.path.basename(head_path)} ({hw}x{hh})")
+    print(f"receptor:{os.path.basename(receptor_path)}")
+    print(f"tail:    body {bw}x{bh}" + (f" + cap {cap_h}px" if cap_px else "") + f" -> {bw}x{canvas_h}")
+
+
+if __name__ == "__main__":
+    main()

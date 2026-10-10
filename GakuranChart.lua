@@ -1,11 +1,12 @@
 --[[
-    GakuranChart v1.1
+    GakuranChart v1.2
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
     How it works:
       - Custom charts are JSON files in  GakuranCharts/Charts  (executor workspace)
       - Audio/images live in            GakuranCharts/Audio / GakuranCharts/Assets
+      - osu!mania skin packs live in    GakuranCharts/Skins (tools/osu2skin.py)
       - On Play, the chart is injected into the game's own RhythmSongRegistry
         and the official RhythmServiceClient:StartPlay() runs it through the
         real engine (countdown, highway, judging, results).
@@ -21,11 +22,12 @@ local RS = game:GetService("ReplicatedStorage")
 local CoreGui = game:GetService("CoreGui")
 
 local player = Players.LocalPlayer
-local VERSION = "1.1"
+local VERSION = "1.2"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
 local ASSETS_DIR = FOLDER .. "/Assets"
+local SKINS_DIR = FOLDER .. "/Skins"
 local SETTINGS_FILE = FOLDER .. "/Settings.json"
 
 ----------------------------------------------------------------
@@ -167,6 +169,7 @@ local settings = {
     bgColor = { 0, 0, 0 },
     bgTransparency = 0,
     showInWheel = false,
+    skin = "",   -- selected osu!mania skin pack name ("" = game default)
 }
 
 local function saveSettings()
@@ -432,6 +435,215 @@ local function cacheAudioLength(assetId)
     return nil
 end
 
+----------------------------------------------------------------
+-- 5.7 osu!mania skin support
+-- Skin packs live in GakuranCharts/Skins/<name>/ (tools/osu2skin.py).
+-- The highway paints notes/receptors from a VIEW theme built by
+-- RhythmThemeSettings.StoredToViewTheme, and hold tails from
+-- RhythmNoteSprites.Tails[shapeName] (GetTail falls back to
+-- Tails[shapeName] first, so a custom shape gets a custom tail).
+-- While one of our sessions runs we:
+--   * register Tails/Shapes[shapeKey] with the pack's sprites,
+--   * wrap StoredToViewTheme to inject NoteImage/ReceptorImage
+--     (ReceptorColor auto-whitens when ReceptorImage is set),
+--   * write settings._theme.noteShape = shapeKey DIRECTLY.
+-- The public SetNoteShape/SetCustomImage persist through a server
+-- remote, so they are deliberately never used - everything here is
+-- local-only and undone after the session.
+----------------------------------------------------------------
+local skinState = nil          -- { shapeKey, head, receptor, origShapes, wrapped }
+local settingsThemeHosts = {}  -- tables that own a raw _theme with noteShape
+
+do
+    local mod = gcFind(function(t)
+        return type(rawget(t, "GetNoteShape")) == "function"
+            and type(rawget(t, "GetViewTheme")) == "function"
+    end)
+    if mod then
+        if type(rawget(mod, "_theme")) == "table" then
+            table.insert(settingsThemeHosts, mod)
+        end
+        local okG, inst = pcall(mod.Get, mod)
+        if okG and type(inst) == "table" and inst ~= mod
+            and type(rawget(inst, "_theme")) == "table" then
+            table.insert(settingsThemeHosts, inst)
+        end
+        -- force hydration once (their own normal settings Get) so later
+        -- reads of _theme don't trigger a remote mid-play
+        pcall(mod.GetNoteShape, mod)
+    end
+end
+
+local noteSpritesMod = gcFind(function(t)
+    return type(rawget(t, "Shapes")) == "table" and type(rawget(t, "Tails")) == "table"
+        and type(rawget(t, "GetShape")) == "function" and type(rawget(t, "GetTail")) == "function"
+end)
+
+local themeSettingsMod = gcFind(function(t)
+    return type(rawget(t, "StoredToViewTheme")) == "function"
+        and type(rawget(t, "SanitizeAssetId")) == "function"
+end)
+
+local function listSkinPacks()
+    local out, seen = {}, {}
+    local function tryAdd(dir)
+        if type(dir) ~= "string" or dir == "" or seen[dir] then return end
+        seen[dir] = true
+        local mf = dir .. "/manifest.json"
+        if not (pcall(fn.isfile, mf) and fn.isfile(mf)) then return end
+        local okJ, man = pcall(function()
+            return HttpService:JSONDecode(fn.readfile(mf))
+        end)
+        if okJ and type(man) == "table" and type(man.shapeKey) == "string" then
+            man._dir = dir
+            if type(man.name) ~= "string" or man.name == "" then
+                man.name = dir:match("([^/\\]+)$") or man.shapeKey
+            end
+            table.insert(out, man)
+        end
+    end
+    local okL, entries = pcall(fn.listfiles, SKINS_DIR)
+    if okL and type(entries) == "table" then
+        for _, e in ipairs(entries) do
+            local e2 = tostring(e):gsub("\\", "/")
+            if e2:match("manifest%.json$") then
+                tryAdd((e2:gsub("/manifest%.json$", "")))
+            else
+                tryAdd(e2)                          -- entry may BE the skin dir
+                local parent = e2:match("^(.+)/[^/]+$")
+                if parent then tryAdd(parent) end   -- ...or a file inside it
+            end
+        end
+    end
+    table.sort(out, function(a, b) return tostring(a.name) < tostring(b.name) end)
+    return out
+end
+
+local function registerSkin(manifest)
+    if not noteSpritesMod then
+        return nil, "RhythmNoteSprites module not found"
+    end
+    local dir = manifest._dir
+    local function assetOf(file)
+        if type(file) ~= "string" or file == "" then return nil end
+        local path = dir .. "/" .. file
+        if not (pcall(fn.isfile, path) and fn.isfile(path)) then return nil end
+        local okA, a = pcall(fn.getlocalasset, path)
+        return (okA and a) or nil
+    end
+    local headA = assetOf(manifest.head)
+    local recA = assetOf(manifest.receptor)
+    local tailA = assetOf(manifest.tail)
+    if not (headA and recA and tailA) then
+        return nil, "skin files missing in " .. tostring(dir)
+    end
+    local slice = type(manifest.slice) == "table" and manifest.slice or {}
+    local okReg, err = pcall(function()
+        noteSpritesMod.Tails[manifest.shapeKey] = {
+            Body = tailA,
+            Outline = tailA,      -- same sprite; the outline layer just re-draws it
+            BodyRect = nil,
+            OutlineRect = nil,
+            SpriteSize = Vector2.new(tonumber(manifest.tailW) or 64, tonumber(manifest.tailH) or 64),
+            SliceCenter = Rect.new(
+                tonumber(slice[1]) or 0, tonumber(slice[2]) or 0,
+                tonumber(slice[3]) or 0, tonumber(slice[4]) or 0
+            ),
+            Pixel = false,
+        }
+        noteSpritesMod.Shapes[manifest.shapeKey] = {
+            Body = headA,
+            Outline = headA,
+            BodyRect = nil,
+            OutlineRect = nil,
+            SpriteSize = Vector2.new(512, 512),
+            Rotation = 0,
+            Receptor = { Body = recA, Outline = recA, BodyRect = nil, OutlineRect = nil },
+        }
+    end)
+    if not okReg then
+        return nil, "register failed: " .. tostring(err)
+    end
+    return { head = headA, receptor = recA, shapeKey = manifest.shapeKey, name = manifest.name }
+end
+
+local function deactivateSkin()
+    if not skinState then return end
+    if themeSettingsMod and skinState.wrapped then
+        pcall(function()
+            themeSettingsMod.StoredToViewTheme = _G.GakuranChartSkinBase or skinState.origStored
+        end)
+    end
+    _G.GakuranChartSkinBase = nil
+    for host, shape in pairs(skinState.origShapes) do
+        pcall(function()
+            local th = rawget(host, "_theme")
+            if th then th.noteShape = shape end
+        end)
+    end
+    skinState = nil
+end
+
+local function activateSkin(manifest)
+    deactivateSkin()
+    if not manifest then return false end
+    local okReg, packOrErr = pcall(registerSkin, manifest)
+    if not okReg or type(packOrErr) ~= "table" then
+        warn("[GakuranChart] Skin load failed: " .. tostring(packOrErr))
+        return false
+    end
+    local pack = packOrErr
+
+    -- local-only noteShape write (save baseline for restore)
+    local origShapes = {}
+    for _, host in ipairs(settingsThemeHosts) do
+        local th = rawget(host, "_theme")
+        origShapes[host] = th.noteShape
+        th.noteShape = pack.shapeKey
+    end
+
+    -- wrap StoredToViewTheme: inject our images into the view theme the
+    -- highway gets at construction. Reuse a single base function across
+    -- re-executions so wraps never stack.
+    local wrapped = nil
+    local origStored = nil
+    if themeSettingsMod then
+        origStored = _G.GakuranChartSkinBase or rawget(themeSettingsMod, "StoredToViewTheme")
+        _G.GakuranChartSkinBase = origStored
+        wrapped = function(stored, lanes)
+            local vt = origStored(stored, lanes)
+            if type(vt) == "table" and skinState then
+                vt.NoteImage = skinState.head
+                vt.ReceptorImage = skinState.receptor
+                vt.NoteShape = skinState.shapeKey
+            end
+            return vt
+        end
+        pcall(function() themeSettingsMod.StoredToViewTheme = wrapped end)
+    end
+
+    skinState = {
+        shapeKey = pack.shapeKey,
+        name = pack.name,
+        head = pack.head,
+        receptor = pack.receptor,
+        origShapes = origShapes,
+        origStored = origStored,
+        wrapped = wrapped,
+    }
+    return true
+end
+
+local selectedSkinManifest = nil   -- set by the UI dropdown
+
+local function findSelectedSkin()
+    if type(settings.skin) ~= "string" or settings.skin == "" then return nil end
+    for _, man in ipairs(listSkinPacks()) do
+        if man.name == settings.skin then return man end
+    end
+    return nil
+end
+
 local playStatusCallback = nil   -- set by UI to update a status label
 
 local function playChart()
@@ -477,16 +689,32 @@ local function playChart()
     -- Start fresh: don't carry stats from a previous play of this song.
     pcall(function() service._carryOverStats = nil end)
 
+    -- Apply the selected osu!mania skin before the view is constructed
+    -- (StartPlay builds the highway from the current theme).
+    local skinApplied = false
+    local skinMan = selectedSkinManifest or findSelectedSkin()
+    if skinMan then
+        local okS = pcall(activateSkin, skinMan)
+        skinApplied = okS and skinState ~= nil
+        if not skinApplied then
+            warn("[GakuranChart] Skin '" .. tostring(skinMan.name) .. "' failed to apply; using game default")
+        end
+    else
+        deactivateSkin()
+    end
+
     local okP, playErr = pcall(function()
         service:StartPlay(song.id, song.mode or currentChart.mode, { showCountdown = true })
     end)
     if not okP then
         notify("Play failed", tostring(playErr), true)
+        deactivateSkin()
         restoreAttributes()
         destroyUnderframe()
         return
     end
-    notify("Now playing", song.title .. " - " .. song.artist)
+    notify("Now playing", song.title .. " - " .. song.artist
+        .. (skinApplied and skinState and (" [" .. tostring(skinState.name) .. "]") or ""))
     if playStatusCallback then
         playStatusCallback("Playing: " .. song.title .. (okCache and audioLen and (" (" .. math.floor(audioLen) .. "s audio)") or ""))
     end
@@ -499,6 +727,7 @@ local function stopChart()
     pcall(function() service:Stop({ fadeOut = true }) end)
     -- Prevent score carry-over into the next play of this song.
     pcall(function() service._carryOverStats = nil end)
+    deactivateSkin()
     restoreAttributes()
     destroyUnderframe()
     if playStatusCallback then playStatusCallback("Stopped") end
@@ -539,6 +768,7 @@ task.spawn(function()
             if _G.GakuranChartGen ~= MYGEN then return end
             local okP3, playing3 = pcall(function() return service:IsPlaying() end)
             if not (okP3 and playing3) then
+                deactivateSkin()
                 restoreAttributes()
                 destroyUnderframe()
                 if playStatusCallback and not stopRequested then
@@ -706,6 +936,60 @@ TabOpt:CreateToggle({
     end,
 })
 
+TabOpt:CreateSection("osu!mania skin")
+local skinPacks = listSkinPacks()
+local skinNames = { "Game default" }
+local skinByName = {}
+for _, man in ipairs(skinPacks) do
+    table.insert(skinNames, man.name)
+    skinByName[man.name] = man
+end
+local skinDropdown
+do
+    local initial = "Game default"
+    if type(settings.skin) == "string" and skinByName[settings.skin] then
+        initial = settings.skin
+        selectedSkinManifest = skinByName[settings.skin]
+    else
+        settings.skin = ""
+    end
+    skinDropdown = TabOpt:CreateDropdown({
+        Name = "Note skin (applies on play)",
+        Options = skinNames,
+        CurrentOption = initial,
+        MultiSelection = false,
+        Callback = function(option)
+            local name = type(option) == "table" and option[1] or option
+            if name == "Game default" then
+                settings.skin = ""
+                selectedSkinManifest = nil
+            elseif skinByName[name] then
+                settings.skin = name
+                selectedSkinManifest = skinByName[name]
+            end
+            saveSettings()
+        end,
+    })
+end
+TabOpt:CreateButton({
+    Name = "Refresh skin list",
+    Callback = function()
+        local okR, errR = pcall(function()
+            skinPacks = listSkinPacks()
+            skinNames = { "Game default" }
+            skinByName = {}
+            for _, man in ipairs(skinPacks) do
+                table.insert(skinNames, man.name)
+                skinByName[man.name] = man
+            end
+            skinDropdown:Refresh(skinNames)
+            notify("Skins", #skinPacks .. " pack(s) found in " .. SKINS_DIR)
+        end)
+        if not okR then notify("Refresh error", tostring(errR), true) end
+    end,
+})
+TabOpt:CreateLabel("Convert osu! skins with tools/osu2skin.py")
+
 TabOpt:CreateSection("Info")
 TabOpt:CreateLabel("Workspace folder: " .. FOLDER)
 TabOpt:CreateLabel("Drop .json charts in Charts/, audio in Audio/")
@@ -740,6 +1024,7 @@ _G.GakuranChartCleanup = function()
         playing = false
     end
     if not playing then
+        pcall(deactivateSkin)
         pcall(restoreAttributes)
         pcall(destroyUnderframe)
     end
@@ -761,6 +1046,25 @@ _G.GakuranChart = {
     play = playChart,
     stop = stopChart,
     current = function() return currentChartPath end,
+    skins = listSkinPacks,
+    setSkin = function(name)
+        if name == nil or name == "" or name == "Game default" then
+            settings.skin = ""
+            selectedSkinManifest = nil
+        else
+            for _, man in ipairs(listSkinPacks()) do
+                if man.name == name then
+                    settings.skin = name
+                    selectedSkinManifest = man
+                    saveSettings()
+                    return name
+                end
+            end
+            return nil, "no such skin: " .. tostring(name)
+        end
+        saveSettings()
+        return settings.skin
+    end,
 }
 
 notify("GakuranChart loaded", "Welcome " .. (player.DisplayName or player.Name))

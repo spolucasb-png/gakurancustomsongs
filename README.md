@@ -93,7 +93,32 @@ _G.GakuranChart.play()                                   -- play the loaded char
 _G.GakuranChart.stop()                                   -- stop + full cleanup
 _G.GakuranChart.list()                                   -- list available chart files
 _G.GakuranChart.current()                                -- currently loaded chart info
+_G.GakuranChart.skins()                                  -- list installed skin packs
+_G.GakuranChart.setSkin("My Skin")                       -- select a skin ("" = default)
 ```
+
+## osu!mania skins (v1.2)
+
+Convert any osu! skin into a Gakuran skin pack and select it in the Options tab
+(applies on play, local-only, restored after the session):
+
+```
+python tools/osu2skin.py "C:/Users/<you>/AppData/Local/osu!/Skins/MySkin" ^
+  --out <workspace>/GakuranCharts/Skins ^
+  [--keys 4] [--lane 2] [--name "My Skin"]
+```
+
+- Reads the skin.ini `[Mania]` Keys:N section (`NoteImage*`/`KeyImage*`, with
+  stable-name fallbacks); `--lane` picks which column's art to use when a skin
+  has per-lane notes.
+- Produces `head.png` / `receptor.png` / `tail.png` (hold body + end cap
+  composited into one slice-stretched sprite) + `manifest.json`.
+- The loader registers the pack into the game's `RhythmNoteSprites` tables and
+  wraps `StoredToViewTheme` to inject note/receptor images while one of our
+  sessions runs. The game's own `SetNoteShape`/`SetCustomImage` are never used
+  (they persist via a server remote).
+- Limitation: one note image for all 4 lanes (the engine has no per-lane
+  textures); judgement popups and hit sounds stay game-default.
 
 ## v1.1 fixes (verified in-game)
 
@@ -121,6 +146,8 @@ _G.GakuranChart.current()                                -- currently loaded cha
 | --- | --- |
 | `GakuranChart.lua` | The in-game loader (execute this) |
 | `tools/osu2gakuran.py` | osu! → GakuranCharts JSON converter |
+| `tools/osu2skin.py` | osu! skin → GakuranCharts/Skins pack converter |
+| `GakuranCharts/Skins/` | Converted skin packs (manifest + sprites) |
 | `GakuranCharts/Charts/test_end.json` | 30 s smoke-test chart (end/duration/holds) |
 | `FunkyChart_v1.23/` | Original FunkyFriday reference (loader stub + converter exe) |
 
