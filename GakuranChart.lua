@@ -22,9 +22,10 @@ local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local RS = game:GetService("ReplicatedStorage")
 local CoreGui = game:GetService("CoreGui")
+local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "1.3"
+local VERSION = "1.4"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -134,6 +135,9 @@ pcall(service.Init, service)
 
 -- song ids currently injected by us
 local customIds = {}
+-- chart JSONs by song id: needed to build SV models for plays the
+-- loader didn't start itself (song wheel / stage / relay).
+local customCharts = {}
 
 -- Safety net 1: never submit scores for custom songs
 local statsMod = gcFind(function(t) return type(rawget(t, "SubmitStats")) == "function" end)
@@ -408,6 +412,7 @@ local function injectAllCharts()
     for _, path in ipairs(listChartFiles()) do
         local okR, chart = pcall(readChart, path)
         if okR and type(chart) == "table" and type(chart.id) == "string" then
+            customCharts[chart.id] = chart
             local okB, song = pcall(buildGameSong, chart)
             if okB and song then
                 pcall(injectSong, song)
@@ -701,11 +706,333 @@ end
 
 local playStatusCallback = nil   -- set by UI to update a status label
 
+----------------------------------------------------------------
+-- 5.8 SV (scroll velocity) support
+-- Optional chart field: scrollChanges = { {b = beat, rate = mult}, ... }
+-- (osu! inherited green lines via tools/osu2gakuran.py).
+-- The engine draws each note at  hitY +/- (t - now) * scrollPxPerSec;
+-- with SV the distance must be the integral of the scroll rate:
+--   hitY +/- (I(t) - I(now)) * scrollPxPerSec,   I' = rate.
+-- Judging stays time-based (we never touch it - SV is cosmetic).
+-- We recompute each active note's Y ABSOLUTELY every frame, using the
+-- engine's own _now()/HitY()/_scrollPxPerSec. Attachment (verified with
+-- a getconnections diff): the game binds its per-play RenderStepped
+-- handlers DEFERRED - after StartPlay returns - so they always land
+-- AFTER an attach made at play start, and their step overwrote us every
+-- frame (RenderStepped dispatch order = bind order; BindToRenderStep
+-- lost for the same reason). Fix: svApplyFrame re-attaches itself every
+-- frame, moving our connection to the END of the list - we then always
+-- run after the engine and our write is the final one, regardless of
+-- when the game binds. The loader-lifetime attach (StartPlay wrap +
+-- Heartbeat session watch) only establishes the initial connection.
+-- When nothing of ours is playing, the handler costs a couple of field
+-- reads and returns.
+-- Charts without scrollChanges build a nil model (no writes); flat
+-- rates compute values identical to the engine's math.
+----------------------------------------------------------------
+local svModel = nil        -- {pts = {t...}, rates = {r...}, prefix = {I...}} | nil
+local svModelId = nil      -- song id the current model was built for
+local svRenderBound = false
+local svFrameErrors = 0
+local svDisabled = false   -- set after 60 frame errors (handler then no-ops)
+local svRenderConn = nil    -- RenderStepped connection (must bind AFTER the engine's)
+local svWatchConn = nil     -- Heartbeat watch that re-attaches per session
+local svWatchSession = nil  -- session the render conn was last attached for
+local svStartPlayOrig = nil
+local svStartPlayWrap = nil
+local svStartPlayWrapped = false
+local svLastRun = 0        -- os.clock() of last handler invocation
+local svLastWrites = 0     -- note writes performed in that run
+local svAttachedFor = nil  -- engine table whose _renderConn we attached after
+
+local function stopSv()
+    -- Drops the current model; the bound frame hook rebuilds lazily for
+    -- the next custom session. The binding lives until cleanup.
+    svModel = nil
+    svModelId = nil
+    svFrameErrors = 0
+end
+
+-- Piecewise integral of the scroll rate; I(t) = t (implicit rate 1)
+-- before the first change. Any constant offset cancels out because only
+-- differences I(a) - I(b) are ever used.
+local function svIntegral(m, t)
+    local pts = m.pts
+    local n = #pts
+    if t <= pts[1] then
+        return t
+    end
+    if t >= pts[n] then
+        return m.prefix[n] + (t - pts[n]) * m.rates[n]
+    end
+    local lo, hi = 1, n -- largest i with pts[i] <= t
+    while lo < hi do
+        local mid = (lo + hi + 1) // 2
+        if pts[mid] <= t then
+            lo = mid
+        else
+            hi = mid - 1
+        end
+    end
+    return m.prefix[lo] + (t - pts[lo]) * m.rates[lo]
+end
+
+local function buildSvModel(chart, song)
+    local changes = chart.scrollChanges
+    if type(changes) ~= "table" or #changes == 0 then return nil end
+    local bpm = tonumber(song.bpm)
+    if not bpm or bpm <= 0 then bpm = 120 end
+    -- Same beat -> seconds formula the engine uses for notes
+    -- (buildSecondsChart: t = startAt + chartDelay + 60/bpm * b), so SV
+    -- boundaries land on the identical time axis as the note times.
+    -- (song.offsetMs is deliberately NOT part of it - buildSecondsChart
+    -- doesn't take it either.)
+    local base = (tonumber(song.startAt) or 0) + (tonumber(song.chartDelay) or 0)
+    local list = {}
+    for _, c in ipairs(changes) do
+        local b = tonumber(type(c) == "table" and c.b or nil)
+        local r = tonumber(type(c) == "table" and c.rate or nil)
+        if b and r and r > 0 then
+            list[#list + 1] = { t = base + (60 / bpm) * b, r = math.clamp(r, 0.05, 20) }
+        end
+    end
+    table.sort(list, function(x, y) return x.t < y.t end)
+    local pts, rates = {}, {}
+    for _, e in ipairs(list) do
+        -- drop boundaries where the rate does not actually change
+        if #rates == 0 or math.abs(rates[#rates] - e.r) > 1e-6 then
+            pts[#pts + 1] = e.t
+            rates[#rates + 1] = e.r
+        end
+    end
+    if #pts == 0 then return nil end
+    local prefix = { pts[1] }   -- I(pts[1]) = pts[1] under implicit rate 1
+    for i = 2, #pts do
+        prefix[i] = prefix[i - 1] + (pts[i] - pts[i - 1]) * rates[i - 1]
+    end
+    return { pts = pts, rates = rates, prefix = prefix }
+end
+
+local svPerspectiveWarned = false   -- warn once per loader instance while blocked
+
+local function svApplyFrameInner()
+    local sess = service._session
+    if type(sess) ~= "table" or sess._destroyed then
+        if svModelId ~= nil then stopSv() end   -- idle: sv() reports 0
+        return
+    end
+    -- Only ever touch OUR charts' sessions (never a real stage play).
+    local p = sess._playable
+    local id = type(p) == "table" and (p.id or p.songId) or nil
+    if not id or not customIds[id] then
+        if svModelId ~= nil then stopSv() end
+        return
+    end
+    -- Lazily build (or switch) the model for whatever custom song is
+    -- playing right now - loader, wheel and stage starts all land here.
+    -- svModelId set with svModel nil = "checked, this chart has no SV".
+    if svModelId ~= id then
+        local chart = customCharts[id]
+        local reg = service._registry
+        local song = reg and reg._byId and reg._byId[id]
+        svModel = (chart and song) and buildSvModel(chart, song) or nil
+        svModelId = id
+    end
+    local m = svModel
+    if not m then return end
+    -- Perspective mode re-derives lane X + note scale from the vanilla Y
+    -- every frame; a Y-only override would fight it. SV + perspective
+    -- falls back to engine-default rendering (documented limitation).
+    if sess._perspective then
+        if not svPerspectiveWarned then
+            svPerspectiveWarned = true
+            warn("[GakuranChart] SV inactive: perspective mode is on "
+                .. "(the engine re-derives note positions itself)")
+        end
+        return
+    end
+    local view = sess._view
+    if type(view) ~= "table" then return end
+    local okN, now = pcall(function() return sess:_now() end)
+    if not okN or type(now) ~= "number" then return end
+    local S = sess._scrollPxPerSec
+    if type(S) ~= "number" or S <= 0 then return end
+    local okU, up = pcall(function() return view:IsUpscroll() end)
+    local sign = (okU and up == true) and 1 or -1
+    local okH, hitY = pcall(function() return view:HitY() end)
+    if not okH or type(hitY) ~= "number" then return end
+    local iNow = svIntegral(m, now)
+    local active = sess._active
+    if type(active) ~= "table" then return end
+    for _, note in ipairs(active) do
+        local inst = note.inst
+        if inst then
+            local t = note.t
+            -- Head: engine pins held notes at the receptor itself, so only
+            -- free notes get repositioned. Absolute write mirrors the
+            -- engine's formula (_ipx rounding included) with (t - now)
+            -- replaced by (I(t) - I(now)) - idempotent even if the
+            -- engine's step early-returns this frame.
+            if not note.holding then
+                local y = math.floor(hitY + sign * (svIntegral(m, t) - iNow) * S + 0.5)
+                local pos = inst.Position
+                if pos.Y.Offset ~= y then
+                    inst.Position = UDim2.new(pos.X.Scale, pos.X.Offset, pos.Y.Scale, y)
+                end
+            end
+            -- Hold body: SV distance over the SAME time range the engine
+            -- uses (head->end, or now->end while holding). Engine clamps
+            -- to the visible span only as an optimization - the lanes
+            -- frame clips descendants, so identical rendering.
+            local tail = note.tailInst
+            if tail and (note.len or 0) > 0 then
+                local a, b2
+                if note.holding then
+                    a, b2 = now, t + note.len
+                else
+                    a, b2 = t, t + note.len
+                end
+                local rawLen = (svIntegral(m, b2) - svIntegral(m, a)) * S
+                if rawLen < 0 then rawLen = 0 end
+                local h = math.floor((math.floor(rawLen + 0.5) + 0.5) / 2) * 2
+                local sz = tail.Size
+                if h ~= sz.Y.Offset then
+                    tail.Size = UDim2.new(sz.X.Scale, sz.X.Offset, sz.Y.Scale, h)
+                end
+            end
+        end
+    end
+end
+
+local function svApplyFrame()
+    if svDisabled then return end
+    local ok, err = pcall(svApplyFrameInner)
+    -- Stay LAST in the RenderStepped dispatch. The game binds its
+    -- per-play handlers (engine step, view, input) DEFERRED - after
+    -- StartPlay returns - so they always land AFTER an attach made at
+    -- play start, and their step overwrote our SV writes every frame.
+    -- Re-attaching from inside our own callback moves us to the end of
+    -- the connection list for the NEXT frame (connections added
+    -- mid-dispatch join on the following event), making our correction
+    -- the final word on note positions regardless of when the game
+    -- (re)binds. Gated on an active model so idle plays stay cheap.
+    if svModel ~= nil or svModelId ~= nil then
+        pcall(function()
+            if svRenderConn then
+                svRenderConn:Disconnect()
+            end
+            svRenderConn = RunService.RenderStepped:Connect(svApplyFrame)
+        end)
+    end
+    if ok then
+        svFrameErrors = 0
+        return
+    end
+    svFrameErrors += 1
+    if svFrameErrors == 1 then
+        warn("[GakuranChart] SV frame error: " .. tostring(err))
+    elseif svFrameErrors >= 60 then
+        warn("[GakuranChart] SV disabled after repeated frame errors")
+        svDisabled = true
+        stopSv()
+    end
+end
+
+-- Attach our handler to RenderStepped so it is IN the dispatch list.
+-- The game binds its per-play handlers (engine step etc.) DEFERRED, after
+-- StartPlay returns, so an attach made at play start always lands BEFORE
+-- them - static ordering can never win. svApplyFrame therefore
+-- re-attaches itself every frame (see below), which pins our handler to
+-- the END of the connection list for the next frame. RenderStepped
+-- dispatches in bind order, so we then run last and our SV correction is
+-- final. This function only gets us INTO the list; ordering is svApplyFrame's job.
+local function attachSvRender()
+    if svRenderConn then
+        pcall(function() svRenderConn:Disconnect() end)
+        svRenderConn = nil
+    end
+    local ok, conn = pcall(function()
+        return RunService.RenderStepped:Connect(svApplyFrame)
+    end)
+    if ok then
+        svRenderConn = conn
+        svRenderBound = true
+    else
+        warn("[GakuranChart] SV attach failed: " .. tostring(conn))
+    end
+end
+
+-- Attachment lives for the loader's lifetime; playChart only pre-builds
+-- the model (bindSv is idempotent).
+local function bindSv()
+    if svWatchConn then return end
+    -- Wrap service.StartPlay: every play path (loader Play button, song
+    -- wheel, stage) goes through it, so re-attaching right after it
+    -- returns guarantees our RenderStepped :Connect is bound AFTER the
+    -- engine's per-session handler.
+    if not svStartPlayWrapped and type(service.StartPlay) == "function" then
+        svStartPlayOrig = service.StartPlay
+        local orig = svStartPlayOrig
+        svStartPlayWrap = function(self, ...)
+            local r = orig(self, ...)
+            pcall(attachSvRender)
+            return r
+        end
+        pcall(function() service.StartPlay = svStartPlayWrap end)
+        svStartPlayWrapped = true
+    end
+    -- Fallback watch: catches session switches that bypass the wrap.
+    -- Attach runs on a Heartbeat, i.e. always after the frame in which
+    -- the session/engine appeared, so bind order still favors us.
+    local ok, conn = pcall(function()
+        return RunService.Heartbeat:Connect(function()
+            if svDisabled then return end
+            local sess = service._session
+            if sess ~= svWatchSession then
+                svWatchSession = sess
+                if type(sess) == "table" and not sess._destroyed then
+                    attachSvRender()
+                end
+            end
+        end)
+    end)
+    if ok then
+        svWatchConn = conn
+    else
+        warn("[GakuranChart] SV watch failed: " .. tostring(conn))
+    end
+end
+
+local function unbindSv()
+    stopSv()
+    if svRenderConn then
+        pcall(function() svRenderConn:Disconnect() end)
+        svRenderConn = nil
+    end
+    if svWatchConn then
+        pcall(function() svWatchConn:Disconnect() end)
+        svWatchConn = nil
+    end
+    svWatchSession = nil
+    svRenderBound = false
+    if svStartPlayWrapped and svStartPlayOrig then
+        pcall(function()
+            if service.StartPlay == svStartPlayWrap then
+                service.StartPlay = svStartPlayOrig
+            end
+        end)
+    end
+    svStartPlayWrapped = false
+    svStartPlayWrap = nil
+    svStartPlayOrig = nil
+end
+
 local function playChart()
     if not currentChart then
         notify("No chart", "Select and load a chart first", true)
         return
     end
+    stopSv()   -- drop any previous SV model before starting a new session
     local song, err = buildGameSong(currentChart)
     if not song then
         notify("Audio error", err, true)
@@ -718,6 +1045,9 @@ local function playChart()
         return
     end
 
+    if type(currentChart.id) == "string" then
+        customCharts[currentChart.id] = currentChart
+    end
     injectSong(song)
     createUnderframe(currentChart)
 
@@ -738,9 +1068,27 @@ local function playChart()
     -- If a session is already running, stop it synchronously first: Stop()
     -- writes _carryOverStats, so we must stop BEFORE clearing it or the old
     -- session's score would resume on this play.
+    -- IMPORTANT: Stop's view teardown (FadeOutThenDestroy) lands a frame or
+    -- two LATER. Starting in the same tick would let StartPlay reuse the
+    -- still-alive old view, whose pending Destroy then kills the new
+    -- session's note pool too -> every acquire hits a destroyed frame
+    -- ("Parent property ... is locked") and NO notes render. So grab the
+    -- old view and wait for its teardown (Gui set to nil) to finish first.
+    local oldView = nil
+    pcall(function()
+        local s = service._session
+        if type(s) == "table" then oldView = s._view end
+    end)
     pcall(function()
         if service:IsPlaying() then service:Stop({ fadeOut = false }) end
     end)
+    if type(oldView) == "table" then
+        for _ = 1, 40 do   -- ~2s cap; typically resolves in 1-3 frames
+            local okG, gui = pcall(function() return oldView.Gui end)
+            if not okG or gui == nil then break end
+            task.wait(0.05)
+        end
+    end
     -- Start fresh: don't carry stats from a previous play of this song.
     pcall(function() service._carryOverStats = nil end)
 
@@ -759,8 +1107,25 @@ local function playChart()
         destroyUnderframe()
         return
     end
+    -- SV: make sure the lifetime frame hook is bound and pre-build the
+    -- model for this chart (idempotent; wheel/stage starts build theirs
+    -- lazily on the first frame instead).
+    stopSv()
+    local svCount = 0
+    local okSv, svErr = pcall(function()
+        bindSv()
+        local m = buildSvModel(currentChart, song)
+        svModel = m
+        svModelId = song.id
+        if m then svCount = #m.pts end
+    end)
+    if not okSv then
+        stopSv()
+        warn("[GakuranChart] SV setup failed: " .. tostring(svErr))
+    end
     notify("Now playing", song.title .. " - " .. song.artist
-        .. (skinApplied and skinState and (" [" .. tostring(skinState.name) .. "]") or ""))
+        .. (skinApplied and skinState and (" [" .. tostring(skinState.name) .. "]") or "")
+        .. (svCount > 0 and (" [SV " .. svCount .. "]") or ""))
     if playStatusCallback then
         playStatusCallback("Playing: " .. song.title .. (okCache and audioLen and (" (" .. math.floor(audioLen) .. "s audio)") or ""))
     end
@@ -773,6 +1138,7 @@ local function stopChart()
     pcall(function() service:Stop({ fadeOut = true }) end)
     -- Prevent score carry-over into the next play of this song.
     pcall(function() service._carryOverStats = nil end)
+    pcall(stopSv)
     -- NOTE: the skin stays active - it is global for the loader's lifetime.
     restoreAttributes()
     destroyUnderframe()
@@ -816,6 +1182,7 @@ task.spawn(function()
             if not (okP3 and playing3) then
                 restoreAttributes()
                 destroyUnderframe()
+                pcall(stopSv)
                 if playStatusCallback and not stopRequested then
                     playStatusCallback("Song finished")
                 end
@@ -1106,6 +1473,7 @@ _G.GakuranChartCleanup = function()
     -- wrap + shape write are client-side only and the next loader instance
     -- re-applies its own selection right after this cleanup runs.
     pcall(deactivateSkin)
+    pcall(unbindSv)
     if not playing then
         pcall(restoreAttributes)
         pcall(destroyUnderframe)
@@ -1129,6 +1497,25 @@ _G.GakuranChart = {
     stop = stopChart,
     current = function() return currentChartPath end,
     skins = listSkinPacks,
+    sv = function()
+        if svModel then return #svModel.pts end
+        return 0
+    end,
+    -- Introspection for the console: why is (or isn't) SV active?
+    svStatus = function()
+        local sess = service._session
+        local p = type(sess) == "table" and sess._playable or nil
+        local id = type(p) == "table" and (p.id or p.songId) or nil
+        return {
+            bound = svRenderBound,
+            disabled = svDisabled,
+            errors = svFrameErrors,
+            modelId = svModelId,
+            points = svModel and #svModel.pts or 0,
+            sessionCustom = id ~= nil and customIds[id] == true or false,
+            perspective = type(sess) == "table" and sess._perspective == true or false,
+        }
+    end,
     setSkin = function(name)
         if name == nil or name == "" or name == "Game default" then
             settings.skin = ""
@@ -1150,6 +1537,10 @@ _G.GakuranChart = {
         return settings.skin
     end,
 }
+
+-- Bind the SV frame hook for the loader's lifetime: applies to plays
+-- started from the song wheel / stage too, not just our Play button.
+pcall(bindSv)
 
 -- List every custom chart in the game's song wheel right away (if enabled);
 -- the wheel refreshes from the registry on each open.

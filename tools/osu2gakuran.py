@@ -21,7 +21,8 @@ Chart format v1 (GakuranCharts):
     "charts": {"Keyboard": [{"b": beat, "l": lane(1..lanes), "d": holdBeats}]},
     "noteCount": n, "duration": sec,
     "audioFile": "GakuranCharts/Audio/<id>.mp3",
-    "backgroundFile": "GakuranCharts/Assets/<id>.jpg"   # optional
+    "backgroundFile": "GakuranCharts/Assets/<id>.jpg",  # optional
+    "scrollChanges": [{"b": beat, "rate": mult}, ...]   # optional, SV (green lines)
   }
 """
 import argparse
@@ -218,6 +219,18 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
         for t, bl in reds[1:]
     ]
 
+    # osu! inherited timing points (green lines) -> scroll velocity (SV).
+    # rate = -100 / beatLength (osu!mania convention). Stored on the same
+    # fixed reference-BPM beat axis as the notes, so the loader's
+    # t = startAt + 60/bpm * b lands them on the exact osu! ms axis.
+    # Consecutive equal rates collapse into a single boundary.
+    scroll_changes = []
+    for t_ms, mult in svs:
+        r = round(max(0.05, min(20.0, mult)), 4)
+        if scroll_changes and abs(scroll_changes[-1]["rate"] - r) < 1e-9:
+            continue
+        scroll_changes.append({"b": round(t_ms / ref_bl, 4), "rate": r})
+
     duration = max(n["b"] + n["d"] for n in notes) * 60.0 / ref_bpm
 
     chart = {
@@ -239,6 +252,8 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
     }
     if anim_changes:
         chart["animationBpmChanges"] = anim_changes
+    if scroll_changes:
+        chart["scrollChanges"] = scroll_changes
 
     # audio / background
     audio_name = meta(sections, "AudioFilename", "audio.mp3")
@@ -268,7 +283,8 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
     out_path.write_text(json.dumps(chart, ensure_ascii=False, separators=(",", ":")),
                         encoding="utf-8")
     print(f"  -> {out_path.name}: {len(notes)} notes, {ref_bpm} BPM (ref), "
-          f"{len(anim_changes)} BPM changes, {duration:.1f}s")
+          f"{len(anim_changes)} BPM changes, {duration:.1f}s"
+          + (f", {len(scroll_changes)} SV points" if scroll_changes else ""))
     for w in warnings:
         print(f"  ! {w}", file=sys.stderr)
     return chart
