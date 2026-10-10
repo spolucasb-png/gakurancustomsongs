@@ -598,6 +598,16 @@ local function registerSkin(manifest)
             OutlineRect = nil,
             SpriteSize = Vector2.new(512, 512),
             Rotation = 0,
+            -- Hold-tail width. For plain shapes the view sizes a tail at
+            -- NoteSize*0.55, which squeezes osu LN body/cap art to ~half the
+            -- note width (osu draws both at the full column width, so the
+            -- rounded tip also ends up ~half size). Box + TailFrac is the
+            -- engine's own shape-level override: Box (1,1) leaves head and
+            -- receptor sizes unchanged, TailFrac is the tail width as a
+            -- fraction of the note width (manifest.tailFrac, default 1 =
+            -- osu proportions).
+            Box = Vector2.new(1, 1),
+            TailFrac = tonumber(manifest.tailFrac) or 1,
             Receptor = { Body = recA, Outline = recA, BodyRect = nil, OutlineRect = nil },
         }
     end)
