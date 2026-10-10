@@ -491,7 +491,11 @@ end
 -- remote, so they are deliberately never used - everything here is
 -- local-only and undone after the session.
 ----------------------------------------------------------------
-local skinState = nil          -- { shapeKey, head, receptor, origShapes, wrapped }
+-- { shapeKey, head, headHold, receptor, receptorPressed, hasHoldHead,
+--   hasPressed, origShapes, wrapped }. headHold/receptorPressed always hold a
+-- usable asset (they fall back to head/receptor); hasHoldHead/hasPressed say
+-- whether the pack really ships a distinct image.
+local skinState = nil
 local settingsThemeHosts = {}  -- tables that own a raw _theme with noteShape
 
 do
@@ -523,6 +527,166 @@ local themeSettingsMod = gcFind(function(t)
     return type(rawget(t, "StoredToViewTheme")) == "function"
         and type(rawget(t, "SanitizeAssetId")) == "function"
 end)
+
+----------------------------------------------------------------
+-- 5.7b Skin visual pass: dedicated hold-head and pressed-receptor art
+-- The engine paints a note's Head image ONCE when the view is built
+-- (RhythmView: Paint(Head, NoteImage)); PrepareNoteVisual never repaints
+-- it, and pooled note frames are recycled between notes. Likewise the
+-- receptor image is painted once; SetReceptorPressed only tweens colour
+-- and size and records view._receptorPressed[lane]. So, per frame and
+-- ONLY for a custom-chart session built under the active skin, we:
+--   * give every active note with len > 0 the pack's hold-head image and
+--     every other note the tap image (note.inst -> Head, plus the Backing
+--     silhouette and its Band, which the engine painted with the same
+--     image);
+--   * show the pressed image on lanes whose _receptorPressed flag is set
+--     and the resting image otherwise (Receptors[lane].ReceptorVisual,
+--     plus the ReceptorGlow backing and its Band).
+-- Purely cosmetic: no timing/judging state is read or written. Painting
+-- goes through the engine's own RhythmNoteSprites.Paint(label, image,
+-- rect, pixelated); with rect nil it also resets ImageRectOffset/Size,
+-- exactly what the engine does for custom images. A write happens only
+-- when the current Image differs. Real stage plays are never touched
+-- (customIds gate). A view is only touched while it was built with the
+-- active skin's images (view._noteImage == skin.head); if the skin is
+-- switched/deactivated mid-session, restoreViewVisuals puts the view's
+-- own images back.
+----------------------------------------------------------------
+local visTouched = setmetatable({}, { __mode = "k" })   -- views we wrote to
+local visFrameErrors = 0
+local visDisabled = false   -- set after 60 frame errors (SV is unaffected)
+local visWrites = 0
+
+local function paintImage(label, image)
+    local paint = noteSpritesMod and noteSpritesMod.Paint
+    if type(paint) == "function" then
+        paint(label, image)
+    else
+        label.Image = image
+    end
+    visWrites += 1
+end
+
+-- Head layers of a pooled note frame: Head, Backing (the outline
+-- silhouette, a sibling) and Backing.Band.
+local function paintNoteImage(inst, image)
+    local head = inst:FindFirstChild("Head")
+    if not head or head.Image == image then return end
+    paintImage(head, image)
+    local backing = inst:FindFirstChild("Backing")
+    if backing then
+        paintImage(backing, image)
+        local band = backing:FindFirstChild("Band")
+        if band then paintImage(band, image) end
+    end
+end
+
+local function paintReceptorImage(view, lane, image)
+    local receptors = view.Receptors
+    local rec = type(receptors) == "table" and receptors[lane] or nil
+    local vis = rec and rec:FindFirstChild("ReceptorVisual")
+    if not vis or vis.Image == image then return end
+    paintImage(vis, image)
+    local glows = view._receptorGlows
+    local glow = type(glows) == "table" and glows[lane] or nil
+    if glow then
+        paintImage(glow, image)
+        local band = glow:FindFirstChild("Band")
+        if band then paintImage(band, image) end
+    end
+end
+
+-- Put a view's own tap/resting images back on every pooled note frame and
+-- receptor (the images the engine painted when it built the view).
+local function restoreViewVisuals(view)
+    visTouched[view] = nil
+    local noteImage = view._noteImage
+    local theme = view._theme
+    local recImage = type(theme) == "table" and theme.ReceptorImage or nil
+    local pool = view._pool
+    local list = type(pool) == "table" and pool._pool or nil
+    if noteImage and type(list) == "table" then
+        for _, inst in ipairs(list) do
+            paintNoteImage(inst, noteImage)
+        end
+    end
+    if recImage and type(view.Receptors) == "table" then
+        for lane = 1, (tonumber(view._laneCount) or #view.Receptors) do
+            paintReceptorImage(view, lane, recImage)
+        end
+    end
+end
+
+local function restoreTouchedViews()
+    for view in pairs(visTouched) do
+        pcall(restoreViewVisuals, view)
+    end
+end
+
+local function visApplyFrameInner()
+    local sess = service._session
+    if type(sess) ~= "table" or sess._destroyed then return end
+    -- Only OUR charts' sessions (never a real stage play).
+    local p = sess._playable
+    local id = type(p) == "table" and (p.id or p.songId) or nil
+    if not id or not customIds[id] then return end
+    local view = sess._view
+    if type(view) ~= "table" then return end
+    local ss = skinState
+    local theme = view._theme
+    if not (ss and (ss.hasHoldHead or ss.hasPressed) and type(theme) == "table"
+        and view._noteImage == ss.head and theme.ReceptorImage == ss.receptor) then
+        -- no skin, a skin without extras, or a view built under a different
+        -- skin: leave it alone (and undo anything we painted earlier)
+        if visTouched[view] then restoreViewVisuals(view) end
+        return
+    end
+    if ss.hasHoldHead then
+        local active = sess._active
+        if type(active) == "table" then
+            local tapImage, holdImage = ss.head, ss.headHold
+            for _, note in ipairs(active) do
+                local inst = note.inst
+                if inst then
+                    local want = ((note.len or 0) > 0) and holdImage or tapImage
+                    local head = inst:FindFirstChild("Head")
+                    if head and head.Image ~= want then
+                        visTouched[view] = true
+                        paintNoteImage(inst, want)
+                    end
+                end
+            end
+        end
+    end
+    if ss.hasPressed then
+        local pressed = view._receptorPressed
+        if type(pressed) == "table" and type(view.Receptors) == "table" then
+            local rest, down = ss.receptor, ss.receptorPressed
+            if not visTouched[view] then visTouched[view] = true end
+            for lane = 1, (tonumber(view._laneCount) or #view.Receptors) do
+                paintReceptorImage(view, lane, pressed[lane] and down or rest)
+            end
+        end
+    end
+end
+
+local function visApplyFrame()
+    if visDisabled then return end
+    local ok, err = pcall(visApplyFrameInner)
+    if ok then
+        visFrameErrors = 0
+        return
+    end
+    visFrameErrors += 1
+    if visFrameErrors == 1 then
+        warn("[GakuranChart] Skin visual frame error: " .. tostring(err))
+    elseif visFrameErrors >= 60 then
+        warn("[GakuranChart] Skin visuals disabled after repeated frame errors")
+        visDisabled = true
+        pcall(restoreTouchedViews)
+    end
+end
 
 local function listSkinPacks()
     local out, seen = {}, {}
@@ -577,6 +741,10 @@ local function registerSkin(manifest)
     if not (headA and recA and tailA) then
         return nil, "skin files missing in " .. tostring(dir)
     end
+    -- Optional alternate-state sprites (manifest.headHold / receptorPressed).
+    -- Absent field or missing file -> nil -> falls back to the base image.
+    local headHoldA = assetOf(manifest.headHold)
+    local pressedA = assetOf(manifest.receptorPressed)
     local slice = type(manifest.slice) == "table" and manifest.slice or {}
     local okReg, err = pcall(function()
         noteSpritesMod.Tails[manifest.shapeKey] = {
@@ -614,10 +782,21 @@ local function registerSkin(manifest)
     if not okReg then
         return nil, "register failed: " .. tostring(err)
     end
-    return { head = headA, receptor = recA, shapeKey = manifest.shapeKey, name = manifest.name }
+    return {
+        head = headA,
+        headHold = headHoldA or headA,
+        receptor = recA,
+        receptorPressed = pressedA or recA,
+        hasHoldHead = headHoldA ~= nil and headHoldA ~= headA,
+        hasPressed = pressedA ~= nil and pressedA ~= recA,
+        shapeKey = manifest.shapeKey,
+        name = manifest.name,
+    }
 end
 
 local function deactivateSkin()
+    -- undo any hold-head / pressed-receptor paint in live custom views first
+    pcall(restoreTouchedViews)
     if not skinState then return end
     if themeSettingsMod and skinState.wrapped then
         pcall(function()
@@ -696,7 +875,11 @@ local function activateSkin(manifest)
         shapeKey = pack.shapeKey,
         name = pack.name,
         head = pack.head,
+        headHold = pack.headHold,
         receptor = pack.receptor,
+        receptorPressed = pack.receptorPressed,
+        hasHoldHead = pack.hasHoldHead,
+        hasPressed = pack.hasPressed,
         origShapes = origShapes,
         origStored = origStored,
         wrapped = wrapped,
@@ -926,7 +1109,17 @@ local function svApplyFrame()
     end
 end
 
--- Make the ONE persistent RenderStepped connection for svApplyFrame.
+-- ONE callback drives both per-frame passes. Each runs under its own pcall
+-- and error counter, so a failure (or the SV early-outs) in one never stops
+-- the other; the skin visual pass does not depend on an SV model at all.
+local function persistentFrame()
+    svApplyFrame()
+    visApplyFrame()
+end
+
+-- Make the ONE persistent RenderStepped connection for persistentFrame.
+-- (It was svApplyFrame alone before the skin visual pass; the ordering
+-- argument is unchanged.)
 -- Idempotent: a live connection is kept as-is, never replaced, because a
 -- newer connection would dispatch BEFORE (and be overwritten by) the
 -- engine's per-play handlers (newest-first dispatch, see 5.8 header).
@@ -938,7 +1131,7 @@ local function attachSvRender()
     end)
     if okC and alive then return end
     local ok, conn = pcall(function()
-        return RunService.RenderStepped:Connect(svApplyFrame)
+        return RunService.RenderStepped:Connect(persistentFrame)
     end)
     if ok then
         svRenderConn = conn
@@ -1447,6 +1640,22 @@ _G.GakuranChart = {
             points = svModel and #svModel.pts or 0,
             sessionCustom = id ~= nil and customIds[id] == true or false,
             perspective = type(sess) == "table" and sess._perspective == true or false,
+        }
+    end,
+    -- Introspection for the console: is the skin visual pass alive?
+    visStatus = function()
+        local touched = 0
+        for _ in pairs(visTouched) do touched += 1 end
+        local ss = skinState
+        return {
+            bound = svRenderBound,
+            disabled = visDisabled,
+            errors = visFrameErrors,
+            writes = visWrites,
+            touchedViews = touched,
+            skin = ss and ss.name or nil,
+            holdHead = ss and ss.hasHoldHead or false,
+            pressed = ss and ss.hasPressed or false,
         }
     end,
     setSkin = function(name)

@@ -7,7 +7,9 @@ NoteImage*/KeyImage* references with stable-name fallback) and produces a
 GakuranCharts/Skins/<slug>/ pack:
 
     head.png       tap note image (single image for all lanes)
+    headHold.png   optional: long-note head (skin.ini NoteImage<n>H)
     receptor.png   receptor (key) image
+    receptorPressed.png  optional: pressed receptor (skin.ini KeyImage<n>D)
     tail.png       composited long-note sprite: body + end cap,
                    drawn stretched by the engine via SliceCenter
     manifest.json  asset names + tail sprite metrics
@@ -184,11 +186,14 @@ def alpha_bbox(rgba: bytes, w: int, h: int, threshold: int = 8):
     return minx, miny, maxx + 1, maxy + 1
 
 
-def fit_to_frame(rgba: bytes, w: int, h: int, aspect: float = 1.0):
+def fit_to_frame(rgba: bytes, w: int, h: int, aspect: float = 1.0, box=None):
     """Crop to the alpha bounding box and center on a canvas matching the
     engine's frame aspect (the highway paints notes/receptors with ScaleType
-    Fit, so osu skins' oversized transparent canvases render tiny)."""
-    box = alpha_bbox(rgba, w, h)
+    Fit, so osu skins' oversized transparent canvases render tiny).
+    `box` overrides the crop rectangle (minx, miny, maxx, maxy); see
+    shared_box() for why alternate-state sprites reuse their base sprite's."""
+    if box is None:
+        box = alpha_bbox(rgba, w, h)
     if box is None:
         return w, h, rgba
     minx, miny, maxx, maxy = box
@@ -208,6 +213,25 @@ def fit_to_frame(rgba: bytes, w: int, h: int, aspect: float = 1.0):
         dst = ((oy + y) * cw + ox) * 4
         canvas[dst:dst + aw * 4] = cropped[y * aw * 4:(y + 1) * aw * 4]
     return cw, ch, canvas
+
+
+def shared_box(own, ref, tol: int = 2):
+    """Crop box for an alternate-state sprite (hold head, pressed key).
+
+    osu draws a skin's normal and alternate images on the same canvas, so
+    their art keeps its relative position and scale. The base sprite
+    (tap head / resting receptor) is cropped to its own alpha box; when the
+    alternate image has the same source size and its art fits that box
+    (within `tol` px), crop it with the SAME box so both frame identically
+    and nothing visibly jumps in size or position when the engine swaps
+    them. Otherwise return None: the caller crops to the alternate's own
+    box, which never clips art."""
+    if own is None or ref is None:
+        return None
+    if (own[0] >= ref[0] - tol and own[1] >= ref[1] - tol
+            and own[2] <= ref[2] + tol and own[3] <= ref[3] + tol):
+        return ref
+    return None
 
 
 # ------------------------------------------------------------- skin.ini
@@ -315,6 +339,8 @@ def main():
     body_ref = mania_ref(f"NoteImage{i}L")
     cap_ref = mania_ref(f"NoteImage{i}T")
     receptor_ref = mania_ref(f"KeyImage{i}")
+    head_hold_ref = mania_ref(f"NoteImage{i}H")
+    receptor_down_ref = mania_ref(f"KeyImage{i}D")
 
     # stable-name fallbacks
     head_path = resolve_ref(skin_dir, head_ref) if head_ref else None
@@ -325,6 +351,14 @@ def main():
         receptor_path = ci_lookup(skin_dir, f"mania-key{min(lane, 10)}")
     body_path = resolve_ref(skin_dir, body_ref) if body_ref else None
     cap_path = resolve_ref(skin_dir, cap_ref) if cap_ref else None
+
+    # optional extras (stable-name fallbacks mirror the tap/receptor lookups)
+    head_hold_path = resolve_ref(skin_dir, head_hold_ref) if head_hold_ref else None
+    if not head_hold_path:
+        head_hold_path = ci_lookup(skin_dir, f"mania-note{min(lane, 10)}H")
+    receptor_down_path = resolve_ref(skin_dir, receptor_down_ref) if receptor_down_ref else None
+    if not receptor_down_path:
+        receptor_down_path = ci_lookup(skin_dir, f"mania-key{min(lane, 10)}D")
 
     if not head_path:
         print("error: could not resolve a tap-note image (skin.ini NoteImage*, mania-note*)", file=sys.stderr)
@@ -346,12 +380,58 @@ def main():
     # head + receptor: crop to the art's alpha bounding box and center on a
     # frame-aspect canvas, otherwise Fit renders osu canvases tiny
     hw, hh, head_px = png_decode(head_data)
-    hw, hh, head_px = fit_to_frame(head_px, hw, hh, args.aspect)
+    head_src = (hw, hh, alpha_bbox(head_px, hw, hh))
+    hw, hh, head_px = fit_to_frame(head_px, hw, hh, args.aspect, head_src[2])
     head_out = png_encode(hw, hh, head_px)
 
     rw, rh, rec_px = png_decode(receptor_data)
-    rw, rh, rec_px = fit_to_frame(rec_px, rw, rh, args.aspect)
+    rec_src = (rw, rh, alpha_bbox(rec_px, rw, rh))
+    rw, rh, rec_px = fit_to_frame(rec_px, rw, rh, args.aspect, rec_src[2])
     rec_out = png_encode(rw, rh, rec_px)
+
+    def fit_optional(path, label, base_src):
+        """Crop/pad an optional alternate-state image like its base sprite.
+        base_src = (w, h, alpha box) of the base image it replaces. Returns
+        (PNG bytes, framing note), or None when the image can't be read
+        (the pack still builds without it)."""
+        try:
+            with open(path, "rb") as f:
+                ow, oh, opx = png_decode(f.read())
+        except (ValueError, OSError, IndexError, zlib.error, struct.error) as e:
+            print(f"warning: could not read {label} ({os.path.basename(path)}): {e}; skipping",
+                  file=sys.stderr)
+            return None
+        own_box = alpha_bbox(opx, ow, oh)
+        box, note = own_box, "own alpha box"
+        if own_box is None:
+            print(f"warning: {label} ({os.path.basename(path)}) is fully transparent; skipping",
+                  file=sys.stderr)
+            return None
+        if (ow, oh) == (base_src[0], base_src[1]):
+            ref = shared_box(own_box, base_src[2])
+            if ref is not None:
+                box, note = ref, "same crop as its base sprite"
+            else:
+                print(f"warning: {label} art extends past its base sprite's bounds; "
+                      f"cropped to its own box (its size may differ slightly in game)",
+                      file=sys.stderr)
+        ow, oh, opx = fit_to_frame(opx, ow, oh, args.aspect, box)
+        return png_encode(ow, oh, opx), note
+
+    # Identical-to-base refs (e.g. NoteImage<n>H == NoteImage<n>) add nothing.
+    def same_file(a, b):
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+    hold_head_out, hold_head_note = None, ""
+    if head_hold_path and not same_file(head_hold_path, head_path):
+        res = fit_optional(head_hold_path, "hold head", head_src)
+        if res:
+            hold_head_out, hold_head_note = res
+    receptor_down_out, receptor_down_note = None, ""
+    if receptor_down_path and not same_file(receptor_down_path, receptor_path):
+        res = fit_optional(receptor_down_path, "pressed receptor", rec_src)
+        if res:
+            receptor_down_out, receptor_down_note = res
     bw, bh, body_px = png_decode(open(body_path, "rb").read())
 
     # Composite tail sprite: [cap][body][cap-flipped].
@@ -396,6 +476,13 @@ def main():
         f.write(rec_out)
     with open(os.path.join(out_dir, "tail.png"), "wb") as f:
         f.write(png_encode(bw, canvas_h, canvas))
+    for fname, data in (("headHold.png", hold_head_out), ("receptorPressed.png", receptor_down_out)):
+        target = os.path.join(out_dir, fname)
+        if data is not None:
+            with open(target, "wb") as f:
+                f.write(data)
+        elif os.path.isfile(target):
+            os.remove(target)  # stale extra from an earlier run of this pack
 
     manifest = {
         "name": name,
@@ -408,6 +495,10 @@ def main():
         "slice": [bw // 2 - 1, slice_y1, bw // 2 + 1, slice_y2],
         "source": {"skinDir": skin_dir, "keys": keys, "lane": lane},
     }
+    if hold_head_out is not None:
+        manifest["headHold"] = "headHold.png"
+    if receptor_down_out is not None:
+        manifest["receptorPressed"] = "receptorPressed.png"
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
 
@@ -415,6 +506,8 @@ def main():
     print(f"name:    {name}")
     print(f"shape:   {shape_key}")
     print(f"head:    {os.path.basename(head_path)} ({hw}x{hh})")
+    print(f"holdhead:{os.path.basename(head_hold_path) + ' (' + hold_head_note + ')' if hold_head_out is not None else '-'}")
+    print(f"pressed: {os.path.basename(receptor_down_path) + ' (' + receptor_down_note + ')' if receptor_down_out is not None else '-'}")
     print(f"receptor:{os.path.basename(receptor_path)}")
     print(f"tail:    body {bw}x{bh}" + (f" + caps {cap_h}px each" if cap_px else "") + f" -> {bw}x{canvas_h}, slice [{bw // 2 - 1}, {slice_y1}, {bw // 2 + 1}, {slice_y2}]")
 

@@ -13,8 +13,10 @@
     97
   ],
   "source": {
-    "skinDir": "C:\\Users\\Administrator\\AppData\\Local\\osu!\\Skins\\- !       NC Skin ~[Svnth's Edit!]~",
+    "skinDir": "tools/- !       NC Skin ~[Svnth's Edit!]~",
     "keys": 4,
     "lane": 2
-  }
+  },
+  "headHold": "headHold.png",
+  "receptorPressed": "receptorPressed.png"
 }
