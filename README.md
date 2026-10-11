@@ -103,6 +103,32 @@ JSON, one file per chart in `GakuranCharts/Charts/`:
   character holds — custom mania charts are Keyboard mode, so they appear
   while holding a keyboard.
 
+## Local scores (GakuranCharts/Scores.json)
+
+Custom plays are never submitted, so the game's leaderboard never sees them and
+a custom chart had nothing to beat. The stats the engine hands to `SubmitStats`
+are recorded locally instead, at the same guard that stops them being sent.
+**Nothing is ever sent anywhere.**
+
+One row per chart, keyed by **chart id** (so each difficulty of a
+multi-difficulty song scores separately), holding `plays`, `lastPlayed`, the
+`best` run and the `last` run. Each run stores score, maxCombo, hits, judged,
+misses, clutch and `hitRate` (= hits/judged), plus the engine's `raw` stats
+table verbatim. The Charts tab shows the loaded chart's best, and a finished run
+notifies with either "New best!" or "Score saved".
+
+```lua
+_G.GakuranChart.scores()                 -- the whole table
+_G.GakuranChart.scores("me_u_hyper")     -- one chart's row (live, not a copy)
+_G.GakuranChart.scoreLine()              -- one-line best for the loaded chart
+_G.GakuranChart.clearScores()            -- wipe all
+_G.GakuranChart.clearScores("me_u_hyper")-- wipe one
+```
+
+`hitRate` is named that, not "accuracy", because the exact meaning of the
+engine's `Hits` field is not confirmed yet; the raw table is kept so no
+interpretation is baked in irreversibly.
+
 ## Console API
 
 `_G.GakuranChart` (after executing the loader):
@@ -115,7 +141,17 @@ _G.GakuranChart.list()                                   -- list available chart
 _G.GakuranChart.current()                                -- currently loaded chart info
 _G.GakuranChart.skins()                                  -- list installed skin packs
 _G.GakuranChart.setSkin("My Skin")                       -- select a skin ("" = default)
+_G.GakuranChart.diag()                                   -- startup self-test (see below)
+_G.GakuranChart.scores()                                 -- local scores table
 ```
+
+### `diag()`
+
+A startup self-test, because the loader depends on private fields of a game it
+does not control: when an update breaks something it names the piece that moved
+instead of just failing. Reports every `getgc` target, the service's private
+state and methods, each hook slot's status (`installed` / `beneath-foreign` /
+`displaced` / `absent`), counts, the live settings, and a one-line `summary`.
 
 ## osu!mania skins (v1.3)
 
@@ -199,6 +235,7 @@ custom is sent to the server.
 | `tools/osu2gakuran.py` | osu! → GakuranCharts JSON converter |
 | `tools/osu2skin.py` | osu! skin → GakuranCharts/Skins pack converter |
 | `GakuranCharts/Skins/` | Converted skin packs (manifest + sprites) |
+| `GakuranCharts/Scores.json` | Local scores, written by the loader (never sent) |
 | `tools/check.py` | Syntax gate: Luau parse + Python + chart/manifest JSON |
 | `tools/deploy.py` | Gate, then copy the loader into the executor workspace |
 | `FunkyChart_v1.23/` | Original FunkyFriday reference (loader stub + converter exe) |

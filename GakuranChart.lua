@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.15
+    GakuranChart v2.0.16
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,13 +25,14 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.15"
+local VERSION = "2.0.16"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
 local ASSETS_DIR = FOLDER .. "/Assets"
 local SKINS_DIR = FOLDER .. "/Skins"
 local SETTINGS_FILE = FOLDER .. "/Settings.json"
+local SCORES_FILE = FOLDER .. "/Scores.json"
 
 ----------------------------------------------------------------
 -- 0. Executor capability check
@@ -349,9 +350,23 @@ function HK.ensure(name, mod, key, makeWrap, rev)
     return b
 end
 
+-- Custom songs are never submitted, but the stats the engine hands over are
+-- real, so the live instance records them locally instead of dropping them
+-- (section 5.97). The handler lives on the base RECORD, exactly like
+-- b.handler on StartPlay: the wrapper closes over its record only, so a
+-- retired instance is never called, and a wrapper left behind by a deferred
+-- restore degrades to a pure guard. submitRev exists because a wrapper body is
+-- created once per client - without it, a client already holding a v2 base
+-- from an earlier loader version would keep the old body and silently record
+-- nothing.
+HK.submitRev = 1
 function HK.makeSubmit(b)
     return function(songId, ...)
-        if guardIds[songId] then return end
+        if guardIds[songId] then
+            local h = b.scoreHandler
+            if h then pcall(h, songId, ...) end
+            return
+        end
         return b.under(songId, ...)
     end
 end
@@ -373,7 +388,7 @@ end
 -- Safety net 1: never submit scores for custom songs
 local statsMod = GC.stats
 if statsMod then
-    HK.ensure("SubmitStats", statsMod, "SubmitStats", HK.makeSubmit)
+    HK.ensure("SubmitStats", statsMod, "SubmitStats", HK.makeSubmit, HK.submitRev)
 end
 
 -- Safety net 2: never query jam sync / fire amp relay for custom songs
@@ -2286,6 +2301,12 @@ _G.GakuranChartCleanup = function()
                 wb.renderMenu = nil
             end
         end)
+        pcall(function()
+            local sb = _G.GakuranChartHookBase and _G.GakuranChartHookBase["SubmitStats"]
+            if type(sb) == "table" and sb.scoreHandler == HK.scoreHandler then
+                sb.scoreHandler = nil   -- a retired instance must not record
+            end
+        end)
         pcall(destroyPicker)
         local playing = false
         pcall(function() playing = service:IsPlaying() end)
@@ -2910,6 +2931,130 @@ task.spawn(function()
 end)
 
 ----------------------------------------------------------------
+-- 5.97 Local scores (GakuranCharts/Scores.json)
+--
+-- Custom plays are never submitted, so the engine's leaderboard never sees
+-- them and a custom chart had nothing to beat. The guard wrapper already
+-- receives the genuine stats on their way to being dropped, so they are
+-- recorded here instead. Nothing is ever sent anywhere - this file is local.
+--
+-- The payload was captured live rather than guessed (Madium, placeVersion
+-- 7646). RhythmStatsClient.SubmitStats takes five arguments:
+--   1 songId (string), 2 mode (string), 3 number and 4 nil - both still
+--   unidentified, being 0/nil on a capture run that took no input - and
+--   5 the stats table { Clutch, Hits, Judged, MaxCombo, Score }.
+-- The raw table is stored verbatim beside the derived figures so nothing is
+-- lost if "Hits" turns out to mean one judgement rather than every non-miss.
+-- a3/a4 are kept on the last play for the same reason: a real played run will
+-- show what they are without another capture session.
+--
+-- Rows are keyed by CHART id, not by the submitted song id. A multi-difficulty
+-- parent submits the PARENT id, so keying on that would collapse every
+-- difficulty of a song into one row. customCharts[songId] is re-pointed at
+-- pick time (and set for singles and for Rayfield plays), so it names the
+-- difficulty actually played.
+----------------------------------------------------------------
+local SCORES_VERSION = 1
+local scores = { formatVersion = SCORES_VERSION, charts = {} }
+
+local function loadScores()
+    local okF, isf = pcall(fn.isfile, SCORES_FILE)
+    if not (okF and isf) then return end
+    local ok2, data = pcall(function() return HttpService:JSONDecode(fn.readfile(SCORES_FILE)) end)
+    if ok2 and type(data) == "table" and type(data.charts) == "table" then
+        scores = data
+        scores.formatVersion = SCORES_VERSION
+    end
+end
+
+local function saveScores()
+    pcall(fn.writefile, SCORES_FILE, HttpService:JSONEncode(scores))
+end
+
+loadScores()
+
+local function num(v) return (type(v) == "number" and v == v) and v or 0 end
+
+-- Fold one finished play into its chart row. Returns the row and whether this
+-- run was a new best, so the caller can say which.
+local function recordScore(songId, mode, a3, a4, stats)
+    if type(stats) ~= "table" then return nil, false end
+    local chart = customCharts[songId]
+    local key = (type(chart) == "table" and type(chart.id) == "string" and chart.id) or songId
+    if type(key) ~= "string" or key == "" then return nil, false end
+
+    local judged, hits = num(stats.Judged), num(stats.Hits)
+    local run = {
+        score = num(stats.Score),
+        maxCombo = num(stats.MaxCombo),
+        hits = hits,
+        judged = judged,
+        misses = math.max(0, judged - hits),
+        clutch = num(stats.Clutch),
+        -- Hits/Judged. Called hitRate, not accuracy, because the exact meaning
+        -- of Hits is not confirmed yet (see the section comment).
+        hitRate = (judged > 0) and (hits / judged) or 0,
+        at = os.time(),
+        raw = stats,
+        a3 = a3,
+        a4 = a4,
+    }
+
+    local row = scores.charts[key]
+    if type(row) ~= "table" then
+        row = { plays = 0 }
+        scores.charts[key] = row
+    end
+    row.plays = num(row.plays) + 1
+    row.lastPlayed = run.at
+    row.mode = mode or row.mode
+    row.songId = songId
+    if type(chart) == "table" then
+        row.title = chart.title or row.title
+        row.artist = chart.artist or row.artist
+        row.difficulty = diffName(chart)
+    end
+    row.last = run
+
+    local isBest = (type(row.best) ~= "table") or (run.score > num(row.best.score))
+    if isBest then row.best = run end
+
+    saveScores()
+    return row, isBest
+end
+
+-- Announce a finished custom run. Kept separate from recordScore so that a
+-- notify error can never cost us the file write.
+local function onCustomStatsSubmitted(songId, mode, a3, a4, stats)
+    local row, isBest = recordScore(songId, mode, a3, a4, stats)
+    if not row then return end
+    local r = row.last
+    notify(isBest and "New best!" or "Score saved",
+        ("%s - %d  (%.2f%%, combo %d)%s"):format(
+            row.title or songId, r.score, r.hitRate * 100, r.maxCombo,
+            isBest and "" or ("  |  best " .. tostring(num(row.best and row.best.score)))))
+end
+
+do
+    local b = hookBase["SubmitStats"]
+    if type(b) == "table" then b.scoreHandler = onCustomStatsSubmitted end
+end
+HK.scoreHandler = onCustomStatsSubmitted
+
+-- One-line best for a chart, for the UI and the console.
+local function scoreLine(chart)
+    if type(chart) ~= "table" then return "No chart loaded" end
+    local row = scores.charts[chart.id]
+    if type(row) ~= "table" or type(row.best) ~= "table" then
+        return "No local score yet"
+    end
+    local b = row.best
+    return ("Best %d  |  %.2f%%  |  combo %d  |  %d/%d hit  |  %d play(s)"):format(
+        num(b.score), num(b.hitRate) * 100, num(b.maxCombo),
+        num(b.hits), num(b.judged), num(row.plays))
+end
+
+----------------------------------------------------------------
 -- 6. UI (Rayfield)
 ----------------------------------------------------------------
 -- The whole UI is built inside buildUI() and run under pcall (see the end of
@@ -2954,6 +3099,7 @@ local function refreshChartList()
 end
 
 local infoLabel
+local scoreLabel
 local chartDropdown = Tab:CreateDropdown({
     Name = "Charts in GakuranCharts/Charts",
     Options = refreshChartList(),
@@ -2981,6 +3127,7 @@ local chartDropdown = Tab:CreateDropdown({
                 )
             )
         end
+        if scoreLabel then pcall(function() scoreLabel:Set(scoreLine(chart)) end) end
         notify("Chart loaded", chart.title)
     end,
 })
@@ -3001,6 +3148,9 @@ Tab:CreateButton({
 })
 
 infoLabel = Tab:CreateLabel("No chart loaded")
+-- Local best for the loaded chart. Custom plays are never submitted, so this
+-- is the only scoreboard they have.
+scoreLabel = Tab:CreateLabel(scoreLine(currentChart))
 
 Tab:CreateSection("Playback")
 Tab:CreateButton({
@@ -3243,6 +3393,23 @@ _G.GakuranChart = {
     stop = stopChart,
     current = function() return currentChartPath end,
     skins = listSkinPacks,
+    -- Local scores. Never sent anywhere; GakuranCharts/Scores.json.
+    -- scores()      -> the whole table
+    -- scores(id)    -> one chart's row (chart id, not song id)
+    scores = function(chartId)
+        if chartId == nil then return scores end
+        return scores.charts[chartId]
+    end,
+    scoreLine = function(chart) return scoreLine(chart or currentChart) end,
+    clearScores = function(chartId)
+        if chartId == nil then
+            scores = { formatVersion = SCORES_VERSION, charts = {} }
+        else
+            scores.charts[chartId] = nil
+        end
+        saveScores()
+        return true
+    end,
     -- Startup self-test. The loader reads private fields of a game it does not
     -- control, so when an update breaks something this says WHICH piece moved
     -- instead of just failing. Pure read, JSON-encodable, no side effects.

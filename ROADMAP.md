@@ -159,11 +159,29 @@ Order: A1.5, then A1, A2, A3. A1 is Python-only and cannot regress the loader, s
   the capture run took no input; identify them from a played run before relying
   on them. `QueryJamSync` was also seen firing twice with the custom id and
   being correctly swallowed.
-- [ ] Save best score, accuracy and combo per chart locally. Never sent anywhere.
-  The guard wrapper is the place to do it, via a `b.scoreHandler` on the base
-  record (same discipline as `b.handler` on StartPlay) plus a `HK.submitRev` so
-  an older wrapper body gets rebuilt on re-execution rather than silently
-  recording nothing.
+- [x] **DONE (v2.0.16).** `GakuranCharts/Scores.json`, one row per chart with
+  `plays`, `lastPlayed`, `best` and `last`; each run holds score, maxCombo,
+  hits, judged, misses, clutch, `hitRate` and the engine's `raw` table
+  verbatim. Recorded at the guard wrapper via `b.scoreHandler` on the base
+  record (same discipline as `b.handler`), with `HK.submitRev = 1` so a client
+  already holding a v2 base gets the new wrapper body instead of silently
+  recording nothing. Cleanup clears the handler so a retired instance never
+  records. API: `scores()`, `scores(id)`, `scoreLine()`, `clearScores([id])`;
+  the Charts tab shows the loaded chart's best and a finished run notifies
+  "New best!" / "Score saved".
+- Keyed by **chart** id, not the submitted song id: a multi-difficulty parent
+  submits the PARENT id, so keying on that would collapse a song's difficulties
+  into one row. `customCharts[songId]` is re-pointed at pick time, so it names
+  the difficulty actually played.
+- Live verification: a real 28 s play recorded 0.0 s after the song ended
+  (`judged=27 hits=0`, correct for a run that took no input); `rev=1` confirmed
+  the wrapper body was rebuilt; the guard still passes a genuine id through and
+  still swallows a custom one; best-vs-last kept 500000 over a later 1000;
+  derived figures correct (25/27 -> 92.59%, 2 misses); scores survived a
+  re-execution (reloaded from disk) with 8/8 hook slots still ours.
+- Still open: `SubmitStats` args 3 and 4 remain unidentified (0/nil on every
+  no-input run so far). They are stored on each run as `a3`/`a4`, so the first
+  genuinely *played* run will reveal them with no extra work.
 
 ### 8b. Safety net: call conventions now verified (was an open caveat)
 The note under item 3 said the `SubmitStats`/`QueryJamSync` bogus-id probes
