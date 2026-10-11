@@ -15,52 +15,36 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
-### Current task: v2.0.18 reload hardening (notification errors + wheel-controller scan)
-Goal: stop the console errors after back-to-back reloads and make the wheel
-controller discovery reliable. Found by reproducing on the live client (PID
-14512) with both v2.0.16 and v2.0.17 (identical behaviour):
-- **Rayfield notification errors.** A reload destroys the previous Rayfield GUI
-  while its `Rayfield:Notify` threads (own `task.spawn`, ~5.3 s life) are still
-  sleeping; when they wake, `newNotification.Title` (L1387) / `.Icon` (L1411) are
-  gone -> `X is not a valid member of Frame "Song wheel"`. Count = reloads - 1;
-  reloads >= 8 s apart are clean. Harmless to the new instance (1 GUI, 7 children).
-- **`Wheel controller not found - difficulty picker falls back to overlay`.**
-  `findWheelController` scans `getgc(true)` once at init and the scan is flaky:
-  5 identical scans returned 4,4,0,4,4 matches with nothing changed; seen in
-  ~2 of 10 reloads on v2.0.17 and 2 of 3 on v2.0.16. `armWheelMenu` retries on
-  first use, so the usual result is only the warning, but a miss there too means
-  the overlay instead of the wheel submenu.
-
-Plan (all in `GakuranChart.lua`, candidate first, nothing deployed live):
-1. Load Rayfield through `loadRayfield()`: patch the source IN MEMORY (file on
-   disk untouched) so every `task.wait(...)` statement inside
-   `RayfieldLibrary:Notify` is followed by `if not newNotification.Parent then
-   return end`. Fall back to the unpatched source if the anchors are missing, the
-   patch count is 0 or the patched chunk does not compile.
-2. Init-time wheel scan: up to 3 forced retries 0.25 s apart, aborting if the
-   generation changed (a newer reload took over).
-3. Version 2.0.17 -> 2.0.18 (`VERSION` + header comment).
-
-Progress (update after every step):
-- [x] Reproduced, root-caused, plan agreed with the user.
-- [ ] Patch written and applied (scratch script: `C:\Users\Administrator\_gk_patch\v2_0_18.py`, outside the repo; loader is CRLF).
-- [ ] `python tools/check.py` passes.
-- [ ] Candidate deployed (`python tools/deploy.py --name notifyguard`); tested:
-      back-to-back reloads (expect 0 Icon/Title errors), 8 s-spaced reloads,
-      guard count 6, wheel warning rate over ~10 reloads, `diag()`, 1 GUI left.
-- [ ] Committed; this section moved to "Recent work"; ROADMAP entry added.
-- NOT done on purpose: no `deploy.py --live`; the workspace `GakuranChart.lua`
-  is still v2.0.16 and the live client was running the v2.0.17 candidate.
-
-Noticed, not part of this task: the A4 notes below say tier colours are
-"untouched", but the loader already has `DiffKey`/`DiffTier` hook slots
-(`HK.ensure` calls near L457/L481) - one of the docs is stale; unverified.
+### Current task: none
+The last task (v2.0.18 reload hardening) is finished and committed (`8da328b`);
+see "Recent work" below and ROADMAP 9c. Before starting the next one
+(suggestions: settle the A4 tier-colour question below, then ROADMAP item 9
+quality-of-life), write it here with its goal, plan and a progress checklist,
+and keep this section updated after every step (see the protocol above).
 
 ## State
-`GakuranChart.lua` is the single loader, **v2.0.17**. Everything below was
+`GakuranChart.lua` is the single loader, **v2.0.18**. Everything below was
 verified live on placeVersion 7646 (Madium 2.0.0) before being committed.
+**Deploy state:** nothing has been deployed with `deploy.py --live` since
+v2.0.16 - the workspace `GakuranChart.lua` is still v2.0.16. The repo file
+(v2.0.18, hash `5BA4D24B9C68...`) exists in the workspace as
+`GakuranChart_notifyguard_candidate.lua`; the live client was last running it.
 
 Recent work, newest first:
+- **v2.0.18 - reload hardening (ROADMAP 9c).** (1) `HK.loadRayfield` patches
+  the Rayfield source IN MEMORY so `RayfieldLibrary:Notify` threads return when
+  their frame is unparented (a check after each of its 6 `task.wait` statements);
+  this removes the `Title/Icon is not a valid member of Frame ...` errors printed
+  by back-to-back reloads (N reloads used to print N-1 pairs; reloads >= 8 s apart
+  were always clean). Falls back to the untouched source with a warn if the
+  anchors are missing or the patched chunk does not compile. (2) The init-time
+  `findWheelController` scan (`getgc(true)`, flaky: 4,4,0,4,4 hits in five identical
+  scans) now retries up to 3x, 0.25 s apart, and stops if a newer reload took over.
+  `diag().counts.rayfieldGuard` = guards applied (6 on the current Rayfield).
+  Verified live on client 14512: 10 reloads (4 back-to-back, 3 at 4 s, 3 at 8 s)
+  = 0 error lines and 0 wheel warnings; v2.0.17 printed 5 error pairs on the same
+  patterns. `tools/check.py` passes and the guard patches exactly 6 sites under the
+  luau CLI. New helpers live on `HK` (the main chunk is near Luau's 200-local limit).
 - **Above-4K converter fold (ROADMAP 4 / B), `tools/osu2gakuran.py` only, loader
   untouched.** 5K-18K mania maps are folded to 4 lanes (`fold_columns`, exact
   overlap rule, busy-lane rerouting, drops only when all lanes are busy; adds
@@ -122,7 +106,13 @@ Recent work, newest first:
 - `SubmitStats` args 3 and 4 are still unidentified - they were 0/nil on a
   capture run that took no input. Identify them from a played run before local
   scores relies on them (ROADMAP 8 has the full captured shape).
-- Tier colours (A4) are untouched.
+- Tier colours (A4): this file used to say "untouched", but the loader has
+  `DiffKey`/`DiffTier` hook slots (`HK.ensure` near L457/L481) and ROADMAP A4 is
+  still unticked. Nobody has checked which is right: read that code and `diag()`'s
+  hook list before building anything, then fix whichever doc is stale.
+- v2.0.18: the wheel-scan retry is not proven to fire (0 warnings in 10 reloads vs
+  roughly 20-67% before is consistent with it, but nothing was instrumented). The
+  wheel submenu, play and stop were not re-run on 2.0.18, and it is not deployed live.
 - Folded >4K charts have not been played in-game; the user should try one (for
   example `set304864_5k_*` from the "-+" maps or `ievan_polkka_7k_*`) and judge
   the feel. If a fold choice feels wrong, the knobs are `FOLD_MIN_GAP_MS` and the

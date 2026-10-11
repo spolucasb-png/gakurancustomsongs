@@ -320,3 +320,11 @@ up afterwards, 7/7 suppressed listeners re-enabled.
 - Custom stage lighting isn't implementable: the engine has no lighting slots, only flash/ring pools.
 - Flash/ring matching is possible but marginal (deferred).
 - The day_by_day audio file was overwritten once; the overwriter was never identified.
+
+### 9c. Reload noise: Rayfield notification errors + flaky wheel scan - DONE (v2.0.18, `8da328b`)
+Reproduced on the live client with v2.0.16 and v2.0.17 (same behaviour).
+- [x] **Rayfield notification errors.** `Title/Icon is not a valid member of Frame "Song wheel"` (Rayfield L1387/L1411). A reload destroys the previous Rayfield GUI while `RayfieldLibrary:Notify`'s own `task.spawn` threads (~5.3 s life) are still asleep; when they wake the frame has no children. N back-to-back reloads printed N-1 pairs; reloads >= 8 s apart were clean; the new instance was never affected. Fix: `HK.loadRayfield` patches the Rayfield source in memory (file on disk untouched) with a "frame still parented" check after each of the 6 `task.wait` statements in `Notify`; falls back to the untouched source if anchors are missing or the patched chunk does not compile.
+- [x] **Wheel controller discovery.** `findWheelController` scans `getgc(true)`, which is non-deterministic (five identical scans: 4, 4, 0, 4, 4 hits), so `Wheel controller not found - difficulty picker falls back to overlay` appeared in roughly 2 of 10 reloads. Init now retries up to 3 times (forced, 0.25 s apart) and stops if a newer reload took over.
+- Verified: 10 reloads (4 back-to-back, 3 at 4 s, 3 at 8 s) = 0 error lines, 0 wheel warnings; `diag().counts.rayfieldGuard` = 6; 1 Rayfield GUI left; `tools/check.py` passes.
+- Not verified: whether the retry ever fired (not instrumented), and the wheel submenu / play / stop on 2.0.18.
+- Open follow-ups: deploy with `python tools/deploy.py --live`; the guard depends on `RayfieldLibrary:Notify` keeping its shape (it warns and falls back if not).
