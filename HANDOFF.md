@@ -1,10 +1,45 @@
 # Handoff (for the next chat session)
 
+## READ FIRST: work-in-progress log + save protocol
+**Instruction to every AI session working in this repo: keep this section
+current as you go, not at the end.** Sessions can be cut off at any moment
+(usage limits, API budget errors), and whatever is not written here or
+committed is lost. So:
+1. Before starting a task, add it below under "Current task" with its goal and plan.
+2. After every meaningful step (a function written, a decision made, a test run),
+   update the "Progress" checklist and "Decisions / findings" here, then
+   **commit** (small commits, WIP is fine: `git commit -am "WIP: ..."`).
+3. Record exact next step and anything half-done, including files or scratch
+   scripts left outside the repo (e.g. `C:\Users\Administrator\_gk_patch\`).
+4. When the task is finished, move it to the "Recent work" list below and clear
+   "Current task". Tell the next AI to keep doing the same.
+5. Never claim something works unless it was run; mark untested items as untested.
+
+### Current task: above-4K converter fold (ROADMAP item 4 / B)
+Goal: let osu!mania maps with 5-10 keys be converted to playable 4-lane Gakuran
+charts without changing the game's system (lane count is fixed per instrument:
+Keyboard/Bass/Drums 4, Guitar 2). Today `tools/osu2gakuran.py` skips >4K maps
+(`--allow-lossy-keys` converts them but the loader drops lanes above 4).
+Python-only; do not touch `GakuranChart.lua` for this.
+
+Progress:
+- [x] Found that the converter already skips >4K with a warning (not silent loss).
+- [ ] Study `convert_hitobjects` / `convert_file` (hold handling, `sourceKeys`).
+- [ ] Choose and implement the fold rule (additive; <=4K output must be byte-identical).
+- [ ] Add CLI option (`--fold-keys`) and a `fold` marker in chart JSON (additive field).
+- [ ] Test on real >4K maps: no overlapping notes in one lane, hold integrity, counts.
+- [ ] `python tools/check.py`, commit, update ROADMAP (item 4 / B) and this file.
+
+Decisions / findings: (none yet)
+
 ## State
-`GakuranChart.lua` is the single loader, **v2.0.15**. Everything below was
+`GakuranChart.lua` is the single loader, **v2.0.17**. Everything below was
 verified live on placeVersion 7646 (Madium 2.0.0) before being committed.
 
 Recent work, newest first:
+- **v2.0.17 — Rayfield chart list is one row per song.** A "Difficulty" dropdown
+  appears only for multi-difficulty songs (ROADMAP 8c).
+- **v2.0.16 — local scores** in `GakuranCharts/Scores.json` (ROADMAP 8).
 - **v2.0.15 — instrument no longer stays equipped through the end screen.**
   Reported from play. `restoreAttributes` now writes with three engine teardown
   listeners suppressed (`stopIfInvalidContext`, `recheck@RhythmWheelServiceClient`,
@@ -50,11 +85,8 @@ Recent work, newest first:
 - `SubmitStats` args 3 and 4 are still unidentified - they were 0/nil on a
   capture run that took no input. Identify them from a played run before local
   scores relies on them (ROADMAP 8 has the full captured shape).
-- Local scores (ROADMAP 8) is designed but not built: record via a
-  `b.scoreHandler` on the base record plus a `HK.submitRev`.
-- The `>4K` fold (ROADMAP B) and tier colours (A4) are untouched.
-- Repo hygiene: `.git` is ~52 MB because beatmap archives, a 9 MB mp3 and a
-  10 MB converter .exe are tracked, and `GakuranChart - Copy just in case.lua`
-  is a v1.0 file superseded by 27+ commits of history. No remote yet, so this
-  is the cheap moment to fix it. There is also no `.gitattributes`, so line
-  endings churn (CRLF warnings on commit).
+- Tier colours (A4) are untouched. The `>4K` fold (ROADMAP B) is in progress,
+  see "Current task" at the top.
+- Repo hygiene is done (history rewritten, `.git` ~391 KB, `.gitattributes`
+  added). `_gk_backup/gakuran-pre-cleanup-*.bundle` still holds the full old
+  history; the user deletes it when satisfied.
