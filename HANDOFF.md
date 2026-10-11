@@ -15,20 +15,35 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
-### Current task (session 9): FIX hit flash / hit ring orientation (user approved 15:57)
-Plan (log progress here after every step):
+### DONE (session 9): hit flash / hit ring orientation fixed in v2.0.29 (user approved 15:57)
+No current task is open from this session. DEPLOYED v2.0.29, workspace == repo.
 - [x] Read paint helpers + teardown (`paintImage`, `restoreViewVisuals`, cleanup).
-- [x] IMPLEMENTED (v2.0.29, committed as WIP, NOT yet live-verified; patch script
-  `C:\Users\Administrator\_gk_patch\patch_hitfx.py` already applied, do not re-run):
+- [x] IMPLEMENTED (patch script `C:\Users\Administrator\_gk_patch\patch_hitfx.py`
+  already applied, do not re-run):
   per-view `PlayHitEffect` wrapper that, for the duration of the original call,
   overrides `acquire` on `_flashPool` and `_ringPool` so the acquired frame is
   painted with the lane's tap art at spawn; widen the guard with
   hasTapVariants/hasRecVariants; per-frame repaint also covers the ring;
   restoreViewVisuals unwraps and resets pool frames to the base image.
-- [ ] Candidate -> live test with REAL spawned effects: image at the spawn
-  instant for flash AND ring on lanes 1-4, no stacking after re-exec, 0 errors.
-- [ ] check.py, deploy (candidate first, `--live` only after verification),
-  commit, ROADMAP + this file.
+- [x] Live test with REAL spawned effects (client 14512, AmbieArrowsFFR): 24/24
+  forced and 40/40 engine-triggered effects (real key input) had the right flash
+  AND ring art at the spawn instant on lanes 1-4, incl. recycled frames; no
+  leftover `acquire` shadows; 0 visual errors. setSkin to another skin / "Game
+  default" removed the wrapper and reset all 16 pooled frames to the base image;
+  switching back re-wrapped, spawns correct. Re-running the loader MID-PLAY ends
+  the session (expected), so stacking was checked via the skin round trip.
+- [x] check.py (16 files), candidate -> `--live`, candidate cleaned, hashes equal.
+- Side finding re-tested: two back-to-back executor re-runs on v2.0.29 left
+  14/14 hooks and WheelMenu=installed (the v2.0.17-candidate "displaced" case did
+  NOT reproduce; one trial only).
+- NOT verified: a skin with per-lane taps but no pressed/hold art (none on disk;
+  the widened guard is untested for it), drums/guitar instruments, and whether
+  a human sees the flash right on the first drawn frame (the spawn-instant check
+  is stricter than that, so it should).
+- Lesson: a "fix" that repaints a frame later while the engine recycles pooled
+  frames can look right in a snapshot and still be wrong at spawn; measure the
+  spawn instant (same thread as the call), and check every pool the effect uses
+  (flash AND ring), not just the one in the bug report.
 Investigation that led here (kept for reference):
 User report (2026-10-11 15:51): the NoteHitFlash does not spawn oriented per
 lane like the receptor arrows. Findings from real `view:PlayHitEffect(lane)`

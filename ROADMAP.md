@@ -345,6 +345,28 @@ parent rows and submenu (A2/A3) and is untouched.
   view._laneXs; our shape registers Rotation 0 so the engine's flash rotation
   is a no-op). Verified by spawning REAL flashes through PlayHitEffect:
   lane 1 = tap1 hash, lane 4 = tap4 hash, 0 errors. DEPLOYED v2.0.28.
+- [x] v2.0.29 hit flash AND ring oriented at spawn (user: the flash still does
+  not spawn oriented like the receptor arrows). Measured with real
+  `PlayHitEffect` calls: the engine orients flash/ring only through
+  `GetRotation(shape, lane)` (0 for our shapes) and both pools share the base Up
+  image and recycle frames with the previous lane's art, so v2.0.28 only fixed
+  the flash a frame late (a lane-4 flash spawned with lane 1's art) and the ring
+  was never repainted (Up on every lane). Fix (`wrapHitEffect`): a per-view
+  `PlayHitEffect` wrapper that, for one call, shadows `acquire` on `_flashPool`
+  and `_ringPool`, so the frame is painted with that lane's tap art the moment it
+  is handed out. Removed right after the call (also on error); `unwrapHitEffect`
+  (from `restoreViewVisuals`) removes the wrapper and resets all pooled frames to
+  the base image. The per-frame repaint stays as a fallback and now covers the
+  ring; the guard also accepts skins with only per-lane tap/receptor art.
+  Verified live (client 14512, AmbieArrowsFFR): 24/24 forced effects and 40/40
+  ENGINE-triggered effects (real key input judged by the engine) had the right
+  flash AND ring art at the spawn instant on lanes 1-4, incl. recycled frames; no
+  `acquire` shadows left; 0 visual errors; switching to another skin or "Game
+  default" removed the wrapper and reset all 16 pooled frames, switching back
+  re-wrapped with spawns correct again; two back-to-back loader re-runs left
+  14/14 hooks installed. DEPLOYED v2.0.29, workspace == repo. NOT verified: a
+  skin with per-lane taps but no pressed/hold art (none on disk), drums/guitar
+  instruments, and the receptor-glow/shard art (shards use a separate sprite).
 
 ## Later / future add-ons
 
@@ -410,7 +432,7 @@ up afterwards, 7/7 suppressed listeners re-enabled.
 
 ## Known limits
 - Custom stage lighting isn't implementable: the engine has no lighting slots, only flash/ring pools.
-- Flash/ring matching is possible but marginal (deferred).
+- Flash/ring matching: done in v2.0.29 (see the hit-flash entries above).
 - The day_by_day audio file was overwritten once; the overwriter was never identified.
 
 ### 9c. Reload noise: Rayfield notification errors + flaky wheel scan - DONE (v2.0.18, `8da328b`)
