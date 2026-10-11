@@ -91,6 +91,23 @@ def convert_quaver_skin(skin_dir, out, lane=2, aspect=1.0, name=None):
     receptor_down_out = optional(receptor_down_path, "pressed receptor", rec_src) \
         if receptor_down_path and not same(receptor_down_path, receptor_path) else None
 
+    # Per-lane receptors through manifest.receptors (lanes reusing the base
+    # lane-2 files are skipped and fall back at runtime).
+    rec_map, recp_map = {}, {}
+    for j in range(1, keys + 1):
+        if j == lane:
+            continue
+        g = art("4k", "Receptors", f"receptor-up-{j}")
+        if g and not same(g, receptor_path):
+            res = optional(g, f"lane {j} receptor", rec_src)
+            if res:
+                rec_map[j] = res
+        q = art("4k", "Receptors", f"receptor-down-{j}")
+        if q and not same(q, receptor_down_path or receptor_path):
+            res = optional(q, f"lane {j} pressed receptor", rec_src)
+            if res:
+                recp_map[j] = res
+
     lane_taps = {}
     for j in range(1, keys + 1):
         if j == lane:
@@ -137,7 +154,9 @@ def convert_quaver_skin(skin_dir, out, lane=2, aspect=1.0, name=None):
     wanted = {"head.png", "receptor.png", "tail.png", "manifest.json"}
     for fname, data in (("headHold.png", hold_head_out),
                         ("receptorPressed.png", receptor_down_out),
-                        *((f"tap{l}.png", lane_taps[l]) for l in sorted(lane_taps))):
+                        *((f"tap{l}.png", lane_taps[l]) for l in sorted(lane_taps)),
+                        *((f"rec{l}.png", rec_map[l]) for l in sorted(rec_map)),
+                        *((f"recP{l}.png", recp_map[l]) for l in sorted(recp_map))):
         wanted.add(fname)
         target = pjoin(out_dir, fname)
         if data is not None:
@@ -159,9 +178,14 @@ def convert_quaver_skin(skin_dir, out, lane=2, aspect=1.0, name=None):
         manifest["receptorPressed"] = "receptorPressed.png"
     if lane_taps:
         manifest["taps"] = {str(l): f"tap{l}.png" for l in sorted(lane_taps)}
+    if rec_map:
+        manifest["receptors"] = {str(l): f"rec{l}.png" for l in sorted(rec_map)}
+    if recp_map:
+        manifest["receptorsPressed"] = {str(l): f"recP{l}.png" for l in sorted(recp_map)}
     with open(pjoin(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
     print(f"pack: {out_dir}  taps={sorted(lane_taps) or '-'} "
+          f"recs={sorted(rec_map) or '-'} "
           f"holdhead={'y' if hold_head_out else 'n'} pressed={'y' if receptor_down_out else 'n'}")
     return out_dir
 

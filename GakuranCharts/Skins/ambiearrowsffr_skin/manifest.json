@@ -5,12 +5,12 @@
   "receptor": "receptor.png",
   "tail": "tail.png",
   "tailW": 58,
-  "tailH": 348,
+  "tailH": 296,
   "slice": [
     28,
-    58,
+    32,
     30,
-    290
+    264
   ],
   "source": {
     "skinDir": "FunkyChart_v1.23/ETTERNA/AmbieArrowsFFR skin",
@@ -22,5 +22,15 @@
     "1": "tap1.png",
     "2": "tap2.png",
     "4": "tap4.png"
+  },
+  "receptors": {
+    "1": "rec1.png",
+    "2": "rec2.png",
+    "4": "rec4.png"
+  },
+  "receptorsPressed": {
+    "1": "recP1.png",
+    "2": "recP2.png",
+    "4": "recP4.png"
   }
 }

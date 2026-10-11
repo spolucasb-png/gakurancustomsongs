@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.25
+    GakuranChart v2.0.27
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.25"
+local VERSION = "2.0.27"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -1677,12 +1677,14 @@ end
 -- remote, so they are deliberately never used - everything here is
 -- local-only and undone after the session.
 ----------------------------------------------------------------
--- { shapeKey, head, headHold, receptor, receptorPressed, tapImgs,
---   hasHoldHead, hasPressed, hasTapVariants, origShapes, wrapped }.
+-- { shapeKey, head, headHold, receptor, receptorPressed, tapImgs, recImgs,
+--   recPressedImgs, hasHoldHead, hasPressed, hasTapVariants, hasRecVariants,
+--   origShapes, wrapped }.
 -- headHold/receptorPressed always hold a usable asset (they fall back to
 -- head/receptor); hasHoldHead/hasPressed say whether the pack really ships
 -- a distinct image. tapImgs maps 1-based lanes to tap art (lanes without
 -- their own art fall back to head); hasTapVariants says the map is non-empty.
+-- recImgs/recPressedImgs do the same for receptors (manifest.receptors).
 local skinState = nil
 local settingsThemeHosts = {}  -- tables that own a raw _theme with noteShape
 
@@ -1716,10 +1718,11 @@ local themeSettingsMod = GC.themeSettings
 -- receptor image is painted once; SetReceptorPressed only tweens colour
 -- and size and records view._receptorPressed[lane]. So, per frame and
 -- ONLY for a custom-chart session built under the active skin, we:
---   * give every active note with len > 0 the pack's hold-head image and
---     every other note its lane's tap image (manifest.taps, falling back
---     to the base tap; note.inst -> Head, plus the Backing silhouette and
---     its Band, which the engine painted with the same image);
+--   * give every active hold the pack's dedicated hold-head image, or the
+--     lane's tap image when the pack ships no distinct hold head (etterna);
+--     every other note gets its lane's tap image (manifest.taps, falling
+--     back to the base tap; note.inst -> Head, plus the Backing silhouette
+--     and its Band, which the engine painted with the same image);
 --   * show the pressed image on lanes whose _receptorPressed flag is set
 --     and the resting image otherwise (Receptors[lane].ReceptorVisual,
 --     plus the ReceptorGlow backing and its Band).
@@ -1736,6 +1739,8 @@ local themeSettingsMod = GC.themeSettings
 local visTouched = setmetatable({}, { __mode = "k" })   -- views we wrote to
 local visLane = setmetatable({}, { __mode = "k" })     -- note frame -> 1-based lane (for lane-aware restore)
 local visTapImgs = setmetatable({}, { __mode = "k" })  -- view -> tap-art map it was painted with
+local visRecImgs = setmetatable({}, { __mode = "k" })  -- view -> receptor-art map it was painted with
+local visRecPressedImgs = setmetatable({}, { __mode = "k" })  -- view -> pressed-receptor map
 local visFrameErrors = 0
 local visDisabled = false   -- set after 60 frame errors (SV is unaffected)
 local visWrites = 0
@@ -1788,6 +1793,9 @@ local function restoreViewVisuals(view)
     visTouched[view] = nil
     local tapImgs = visTapImgs[view]
     visTapImgs[view] = nil
+    local recImgs = visRecImgs[view]
+    visRecImgs[view] = nil
+    visRecPressedImgs[view] = nil
     local noteImage = view._noteImage
     local theme = view._theme
     local recImage = type(theme) == "table" and theme.ReceptorImage or nil
@@ -1806,7 +1814,9 @@ local function restoreViewVisuals(view)
     end
     if recImage and type(view.Receptors) == "table" then
         for lane = 1, (tonumber(view._laneCount) or #view.Receptors) do
-            paintReceptorImage(view, lane, recImage)
+            local want = recImage
+            if type(recImgs) == "table" and recImgs[lane] then want = recImgs[lane] end
+            paintReceptorImage(view, lane, want)
         end
     end
 end
@@ -1842,11 +1852,19 @@ local function visApplyFrameInner()
             for _, note in ipairs(active) do
                 local inst = note.inst
                 if inst then
-                    -- Holds share one head image; taps use their lane's art
-                    -- (lanes without their own art fall back to the base tap).
+                    -- Holds use the dedicated head when the pack ships one;
+                    -- otherwise the lane's tap art (so hold arrows point
+                    -- per-lane too); taps use their lane's art, falling back
+                    -- to the base tap.
                     local want
                     if (note.len or 0) > 0 then
-                        want = holdImage
+                        if ss.hasHoldHead then
+                            want = holdImage
+                        elseif type(tapImgs) == "table" and tapImgs[note.lane] then
+                            want = tapImgs[note.lane]
+                        else
+                            want = holdImage
+                        end
                     elseif type(tapImgs) == "table" and tapImgs[note.lane] then
                         want = tapImgs[note.lane]
                     else
@@ -1863,13 +1881,17 @@ local function visApplyFrameInner()
             end
         end
     end
-    if ss.hasPressed then
+    if ss.hasPressed or ss.hasRecVariants then
         local pressed = view._receptorPressed
         if type(pressed) == "table" and type(view.Receptors) == "table" then
             local rest, down = ss.receptor, ss.receptorPressed
+            local recImgs, recPImgs = ss.recImgs, ss.recPressedImgs
             if not visTouched[view] then visTouched[view] = true end
+            visRecImgs[view], visRecPressedImgs[view] = recImgs, recPImgs
             for lane = 1, (tonumber(view._laneCount) or #view.Receptors) do
-                paintReceptorImage(view, lane, pressed[lane] and down or rest)
+                local r = (type(recImgs) == "table" and recImgs[lane]) or rest
+                local d = (type(recPImgs) == "table" and recPImgs[lane]) or down
+                paintReceptorImage(view, lane, pressed[lane] and d or r)
             end
         end
     end
@@ -1962,6 +1984,27 @@ local function registerSkin(manifest)
             end
         end
     end
+    -- Optional per-lane receptor art (manifest.receptors / receptorsPressed).
+    -- Same fallback rule; lanes without entries use the base images.
+    local recImgs, recPressedImgs = {}, {}
+    if type(manifest.receptors) == "table" then
+        for lane, file in pairs(manifest.receptors) do
+            local n = tonumber(lane)
+            if n and type(file) == "string" then
+                local a = assetOf(file)
+                if a then recImgs[n] = a end
+            end
+        end
+    end
+    if type(manifest.receptorsPressed) == "table" then
+        for lane, file in pairs(manifest.receptorsPressed) do
+            local n = tonumber(lane)
+            if n and type(file) == "string" then
+                local a = assetOf(file)
+                if a then recPressedImgs[n] = a end
+            end
+        end
+    end
     local slice = type(manifest.slice) == "table" and manifest.slice or {}
     local okReg, err = pcall(function()
         noteSpritesMod.Tails[manifest.shapeKey] = {
@@ -2005,9 +2048,12 @@ local function registerSkin(manifest)
         receptor = recA,
         receptorPressed = pressedA or recA,
         tapImgs = tapImgs,
+        recImgs = recImgs,
+        recPressedImgs = recPressedImgs,
         hasHoldHead = headHoldA ~= nil and headHoldA ~= headA,
         hasPressed = pressedA ~= nil and pressedA ~= recA,
         hasTapVariants = next(tapImgs) ~= nil,
+        hasRecVariants = next(recImgs) ~= nil,
         shapeKey = manifest.shapeKey,
         name = manifest.name,
     }
@@ -2098,9 +2144,12 @@ local function activateSkin(manifest)
         receptor = pack.receptor,
         receptorPressed = pack.receptorPressed,
         tapImgs = pack.tapImgs,
+        recImgs = pack.recImgs,
+        recPressedImgs = pack.recPressedImgs,
         hasHoldHead = pack.hasHoldHead,
         hasPressed = pack.hasPressed,
         hasTapVariants = pack.hasTapVariants,
+        hasRecVariants = pack.hasRecVariants,
         origShapes = origShapes,
         origStored = origStored,
         wrapped = wrapped,
@@ -4431,6 +4480,10 @@ _G.GakuranChart = {
         if ss and type(ss.tapImgs) == "table" then
             for _ in pairs(ss.tapImgs) do tapLanes += 1 end
         end
+        local recLanes = 0
+        if ss and type(ss.recImgs) == "table" then
+            for _ in pairs(ss.recImgs) do recLanes += 1 end
+        end
         return {
             bound = svRenderBound,
             disabled = visDisabled,
@@ -4441,6 +4494,7 @@ _G.GakuranChart = {
             holdHead = ss and ss.hasHoldHead or false,
             pressed = ss and ss.hasPressed or false,
             tapLanes = tapLanes,
+            recLanes = recLanes,
         }
     end,
     setSkin = function(name)

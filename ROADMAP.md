@@ -322,6 +322,15 @@ parent rows and submenu (A2/A3) and is untouched.
 - [x] DEPLOYED v2.0.25: 36/36 load (29 osu + 1 local + 2 etterna + 4 quaver),
   nyan + bozo (6611 SV pts, 0 err) played, both fixed skins 0 vis errors,
   scores cleared after test plays, workspace == repo.
+- [x] v2.0.26/v2.0.27 skin-correctness round (user eyeball): per-lane hold
+  heads (loader prefers tapImgs[lane] when the pack has no headHold),
+  per-lane receptors (new manifest.receptors/receptorsPressed + recN/recPN
+  packs + ss.recImgs plumbing), etterna cap crop (128px dead canvas rendered
+  as hold/body gap). Real bug found by the new recLanes diagnostic:
+  registerSkin built recImgs but activateSkin never copied them into
+  skinState — always check the handoff between tables. Verified live:
+  rec1/2/4 = Left/Down/Right hashes, lane 3 = base Up, hold heads per-lane,
+  0 errors. DEPLOYED v2.0.27, workspace == repo.
 
 ## Later / future add-ons
 

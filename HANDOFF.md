@@ -80,6 +80,14 @@ Circles skin) and port them into the custom-song script. OSU folder already done
 - [x] Skin eyeball fixes (tail-tip orientation is skin-specific, etterna
   per-lane arrows + hold-width normalize) verified live, scores cleared.
 - [x] DEPLOYED v2.0.25, workspace == repo, candidate cleaned.
+- [x] v2.0.26/v2.0.27 (user eyeball: hold heads all-up, receptors all-up,
+  hold/body gap): loader hold-head per-lane fallback, manifest.receptors +
+  recN/recPN packs, etterna cap crop. Root causes: hold logic hardcoded to
+  the single head; schema had no per-lane receptors; cap art floated in a
+  128px transparent canvas. Hardest bug: recImgs built but never copied from
+  pack to skinState (recLanes diagnostic proved ss.recImgs empty while
+  tapLanes=3) — check handoffs between tables, not just producers.
+- [x] DEPLOYED v2.0.27, workspace == repo, candidate cleaned.
 - Repo hygiene lesson (this session): `git add -A` staged 537 untracked
   FunkyChart_v1.23 files into 8bc108d (reset to 14d76c2 with docs only).
   FunkyChart_v1.23/* is now gitignored except FunkyChart.lua. From here on:

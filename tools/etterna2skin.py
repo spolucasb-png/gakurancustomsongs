@@ -113,6 +113,23 @@ def convert_etterna_skin(skin_dir, out, aspect=1.0, name=None):
     receptor_down_out = optional(receptor_down_path, "pressed receptor", rec_src) \
         if receptor_down_path and not same(receptor_down_path, receptor_path) else None
 
+    # Per-lane receptors (dance layout, like the taps). The base receptor is
+    # the Up pair; other directions become recN/recPN through
+    # manifest.receptors. Lanes reusing the base files are skipped (fallback).
+    lane_dirs_full = {1: "Left", 2: "Down", 3: "Up", 4: "Right"}
+    rec_map, recp_map = {}, {}
+    for j, direction in lane_dirs_full.items():
+        g = find_sprite(skin_dir, "Receptors", [f"_{direction} Go Receptor"])
+        if g and not same(g, receptor_path):
+            res = optional(g, f"lane {j} receptor", rec_src)
+            if res:
+                rec_map[j] = res
+        q = find_sprite(skin_dir, "Receptors", [f"_{direction} Press Receptor"])
+        if q and not same(q, receptor_down_path or receptor_path):
+            res = optional(q, f"lane {j} pressed receptor", rec_src)
+            if res:
+                recp_map[j] = res
+
     bw, bh, body_px = o2s.png_decode(open(body_path, "rb").read())
     # "doubleres" art is ~2x the note width (104px body vs ~58px arrows):
     # normalize holds to the framed head width, otherwise holds render fat.
@@ -124,6 +141,9 @@ def convert_etterna_skin(skin_dir, out, aspect=1.0, name=None):
     slice_y1, slice_y2 = 0, max(1, bh)
     if cap_path:
         cap_w, cap_h, cap_px = o2s.png_decode(open(cap_path, "rb").read())
+        box = o2s.alpha_bbox(cap_px, cap_w, cap_h)
+        if box is not None:
+            cap_w, cap_h, cap_px = crop_to_box(cap_px, cap_w, cap_h, box)
         if cap_w != bw:
             cap_px = o2s.resize_nearest(cap_px, cap_w, cap_h, bw,
                                         max(1, round(cap_h * bw / cap_w)))
@@ -185,8 +205,19 @@ def convert_etterna_skin(skin_dir, out, aspect=1.0, name=None):
         wanted.add(fname)
         with open(pjoin(out_dir, fname), "wb") as f:
             f.write(png)
+    for j, png in sorted(rec_map.items()):
+        fname = f"rec{j}.png"
+        wanted.add(fname)
+        with open(pjoin(out_dir, fname), "wb") as f:
+            f.write(png)
+    for j, png in sorted(recp_map.items()):
+        fname = f"recP{j}.png"
+        wanted.add(fname)
+        with open(pjoin(out_dir, fname), "wb") as f:
+            f.write(png)
     for entry in os.listdir(out_dir):
-        if entry.startswith("tap") and entry.endswith(".png") and entry not in wanted:
+        if entry.endswith(".png") and entry not in wanted and (
+                entry.startswith("tap") or entry.startswith("rec")):
             os.remove(pjoin(out_dir, entry))
 
     manifest = {
@@ -200,11 +231,32 @@ def convert_etterna_skin(skin_dir, out, aspect=1.0, name=None):
         manifest["receptorPressed"] = "receptorPressed.png"
     if lane_taps:
         manifest["taps"] = {str(j): f"tap{j}.png" for j in sorted(lane_taps)}
+    if rec_map:
+        manifest["receptors"] = {str(j): f"rec{j}.png" for j in sorted(rec_map)}
+    if recp_map:
+        manifest["receptorsPressed"] = {str(j): f"recP{j}.png" for j in sorted(recp_map)}
     with open(pjoin(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
     print(f"pack: {out_dir}  taps={sorted(lane_taps) or '-'} "
+          f"recs={sorted(rec_map) or '-'} "
           f"pressed={'y' if receptor_down_out else 'n'}")
     return out_dir
+
+
+def crop_to_box(rgba: bytes, w: int, h: int, box):
+    """Crop RGBA art to its alpha bounding box (kills transparent dead space).
+
+    The etterna bottom-cap art sits in a small corner of a 128px canvas; used
+    raw, the transparent remainder renders as a visible gap between the hold
+    body and the tip. Cropping first removes the gap.
+    """
+    minx, miny, maxx, maxy = box
+    cw, ch = maxx - minx, maxy - miny
+    out = bytearray(cw * ch * 4)
+    for y in range(ch):
+        src = ((miny + y) * w + minx) * 4
+        out[y * cw * 4:(y + 1) * cw * 4] = rgba[src:src + cw * 4]
+    return cw, ch, bytes(out)
 
 
 def main():

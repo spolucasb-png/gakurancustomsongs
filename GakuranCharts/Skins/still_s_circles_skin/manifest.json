@@ -24,5 +24,15 @@
     "1": "tap1.png",
     "3": "tap3.png",
     "4": "tap4.png"
+  },
+  "receptors": {
+    "1": "rec1.png",
+    "3": "rec3.png",
+    "4": "rec4.png"
+  },
+  "receptorsPressed": {
+    "1": "recP1.png",
+    "3": "recP3.png",
+    "4": "recP4.png"
   }
 }
