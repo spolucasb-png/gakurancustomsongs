@@ -139,6 +139,7 @@ def test_seven_key_integration():
 
 def test_convert_file_10k_end_to_end():
     # Regression for the old min(7, keys) clamp: a 10K map must be read as 10K.
+    # Default = fold to the loader's 7 lanes; max_lanes=4 = the old 4-lane fold.
     import contextlib
     import io
     import tempfile
@@ -146,17 +147,58 @@ def test_convert_file_10k_end_to_end():
         d = Path(d)
         objs = [(1, 0, None), (5, 1000, None), (6, 2000, None), (10, 3000, None), (8, 4000, 4600)]
         (d / "m.osu").write_text(osu_text(10, objs), encoding="utf-8")
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            chart = C.convert_file(d / "m.osu", d / "c", d / "a", d / "s", copy_audio=False)
+
+        def run(out, **kw):
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                return C.convert_file(d / "m.osu", d / out, d / "a", d / "s", copy_audio=False, **kw)
+
+        # the old behaviour, still available
+        chart = run("c", max_lanes=4)
         assert chart is not None and chart["sourceKeys"] == 10, chart and chart.get("sourceKeys")
         assert chart["fold"]["from"] == 10 and chart["fold"]["to"] == 4 and chart["fold"]["dropped"] == 0
         by_t = {round(n["b"] * 500): n["l"] for n in chart["charts"]["Keyboard"]}
         assert by_t[0] == 1 and by_t[1000] == 2 and by_t[2000] == 3 and by_t[3000] == 4, by_t
         assert "folded 10K->4 lanes" in chart["charter"], chart["charter"]
+        assert "lanes" not in chart, chart.get("lanes")
         assert (d / "c" / f"{chart['id']}.json").exists()
+        # default: fold to the loader's 7 lanes and say so in the chart
+        chart7 = run("c7")
+        assert chart7 is not None and chart7["fold"]["to"] == 7 and chart7["lanes"] == 7, chart7
+        assert chart7["fold"]["dropped"] == 0, chart7["fold"]
+        assert "folded 10K->7 lanes" in chart7["charter"], chart7["charter"]
+        assert all(1 <= n["l"] <= 7 for n in chart7["charts"]["Keyboard"])
         # --no-fold behaviour: skipped, exactly like before
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            assert C.convert_file(d / "m.osu", d / "c2", d / "a", d / "s", copy_audio=False, fold_keys=False) is None
+        assert run("c2", fold_keys=False) is None
+
+
+def test_native_5k_to_7k_not_folded():
+    # 5K-7K mania maps keep every column (loader 2.0.19+ plays up to 7 lanes);
+    # 4K stays a plain chart; max_lanes=4 restores the old fold for 5K.
+    import contextlib
+    import io
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+
+        def convert(name, keys, **kw):
+            objs = [(c, 1000 * c, None) for c in range(1, keys + 1)] + [(keys, 9000, 9600)]
+            (d / f"{name}.osu").write_text(osu_text(keys, objs), encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                return C.convert_file(d / f"{name}.osu", d / f"out_{name}", d / "a", d / "s",
+                                      copy_audio=False, **kw)
+
+        for keys in (5, 6, 7):
+            chart = convert(f"k{keys}", keys)
+            assert chart is not None and chart["lanes"] == keys and "fold" not in chart, chart
+            notes = chart["charts"]["Keyboard"]
+            lanes = [n["l"] for n in notes]
+            assert lanes[:keys] == list(range(1, keys + 1)) and max(lanes) == keys, lanes
+            assert notes[-1]["l"] == keys and notes[-1]["d"] > 0, notes[-1]
+        chart4 = convert("k4", 4)
+        assert chart4 is not None and "lanes" not in chart4 and "fold" not in chart4, chart4
+        old5 = convert("old5", 5, max_lanes=4)
+        assert old5 is not None and old5["fold"]["to"] == 4 and "lanes" not in old5, old5
+        assert convert("nf8", 8, fold_keys=False, max_lanes=4) is None   # skipped, as before
 
 
 def main():

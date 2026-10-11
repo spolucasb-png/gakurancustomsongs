@@ -43,6 +43,10 @@ FORMAT_VERSION = 1
 MODE_NAMES = {0: "osu!standard", 1: "osu!taiko", 2: "osu!catch", 3: "osu!mania"}
 # Gakuran instrument modes and their lane counts (from RhythmChartUtil.getLaneCount)
 LANES = {"Keyboard": 4, "Guitar": 2, "Bass": 4, "Drums": 4}
+# The loader (HK.maxLanes) plays Keyboard charts with up to this many lanes
+# ("lanes": 5..7 in the chart). A mania map with 5-7 columns is converted 1:1;
+# 8K+ is folded to this many lanes (use --max-lanes 4 for the old 4-lane fold).
+MAX_KEYBOARD_LANES = 7
 
 # --- folding maps with more columns than lanes -----------------------------
 # The engine fixes the lane count per instrument (LANES) and the loader only
@@ -367,7 +371,8 @@ def place_media(src: Path, dst_dir: Path, base: str) -> Path:
 
 def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path,
                  copy_audio=True, mode_override=None,
-                 include_nonmania=False, allow_lossy_keys=False, fold_keys=True):
+                 include_nonmania=False, allow_lossy_keys=False, fold_keys=True,
+                 max_lanes=MAX_KEYBOARD_LANES):
     text = osu_path.read_text(encoding="utf-8", errors="replace")
     sections = parse_osu(text)
 
@@ -388,6 +393,11 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
     # columns of 8K+ maps because x is encoded for the real column count.)
     keys = max(1, min(18, keys))
     lane_cap = LANES.get(gakuran_mode, 4)
+    # Keyboard maps may use more than 4 lanes natively (loader 2.0.19+): a 5K-7K
+    # mania map keeps all its columns, 8K+ folds to max_lanes. Other instruments
+    # (and max_lanes <= 4) keep the engine's fixed lane count.
+    if mode == 3 and gakuran_mode == "Keyboard" and keys > lane_cap and max_lanes > lane_cap:
+        lane_cap = min(keys, min(max_lanes, MAX_KEYBOARD_LANES))
     # More columns than lanes: fold down to the lane count (default). The old
     # lossy path (extra lanes dropped by the loader) is only used when asked for.
     fold = mode == 3 and keys > lane_cap and fold_keys and not allow_lossy_keys
@@ -480,6 +490,10 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
         del chart["sourceKeys"]
     if fold_info:
         chart["fold"] = dict(fold_info)
+    if mode == 3 and gakuran_mode == "Keyboard" and lane_cap > 4:
+        # more-than-4-lane chart: the loader plays it with this many lanes
+        # (it refuses it with a message if its 4K+ hooks are missing)
+        chart["lanes"] = lane_cap
     if anim_changes:
         chart["animationBpmChanges"] = anim_changes
     if scroll_changes:
@@ -550,10 +564,16 @@ def main():
     ap.add_argument("--no-fold", action="store_true",
                     help="do not fold maps with more keys than lanes; skip them instead "
                          "(default: fold them down to the lane count)")
+    ap.add_argument("--max-lanes", type=int, default=MAX_KEYBOARD_LANES, choices=range(4, MAX_KEYBOARD_LANES + 1),
+                    metavar="4-%d" % MAX_KEYBOARD_LANES,
+                    help="lanes a Keyboard chart may use (default %d: 5K-7K maps convert 1:1, "
+                         "8K+ fold to this many lanes; 4 = the old fold-everything-to-4K behaviour)"
+                         % MAX_KEYBOARD_LANES)
     args = ap.parse_args()
 
     kw = dict(mode_override=args.mode, include_nonmania=args.include_nonmania,
-              allow_lossy_keys=args.allow_lossy_keys, fold_keys=not args.no_fold)
+              allow_lossy_keys=args.allow_lossy_keys, fold_keys=not args.no_fold,
+              max_lanes=args.max_lanes)
     inp = args.input
     results = []
     if inp.suffix.lower() == ".osz":

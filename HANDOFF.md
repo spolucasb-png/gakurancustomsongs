@@ -15,7 +15,22 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
-### Current task: deploy v2.0.18 live, then real 4K+ (more than 4 lanes) with a key-binding page
+### Current task (session 4): import the osu! maps with more than 4 keys as real 4K+ charts
+Goal (user, 2026-10-11): the loader plays 5-7 lanes now (v2.0.19/2.0.20), so import the
+osu! maps that have more than 4 columns as native 4K+ charts instead of 4-lane folds.
+- [x] State checked at session start: tree clean at `e602e8b` plus an UNCOMMITTED converter
+      edit by the previous session. **v2.0.20 IS DEPLOYED LIVE** (workspace `GakuranChart.lua`
+      == repo, same size and hash `DC279EB17C...`); the "not deployed" lines further down are stale.
+- [x] Converter (`tools/osu2gakuran.py`): `MAX_KEYBOARD_LANES = 7`, new `--max-lanes 4-7`
+      (default 7). 5K-7K mania maps convert 1:1 and the chart gets `"lanes": N`; 8K+ fold
+      to 7; `--max-lanes 4` = the old fold-everything-to-4K behaviour; `--no-fold` still skips.
+      Verified offline: `tools/test_fold.py` 10/10 (the 10K end-to-end test was rewritten for the
+      new default and a native 5K-7K test added), `tools/check.py` 7/7.
+- [ ] Find the source maps above 4K (previously imported folded: `set304864_5k_*`, `ievan_polkka_7k_*`),
+      re-convert them with the new default, put them in the workspace, check they load.
+- [ ] Play one in the live client; nothing about 5-7 lane judging or the on-screen look is proven yet.
+
+### Current task (older, still partly open): deploy v2.0.18 live, then real 4K+ (more than 4 lanes) with a key-binding page
 Goal (user, 2026-10-11): make maps with more than 4 keys playable as such instead of
 only folded to 4 lanes, with a settings page where the player binds the keys used
 for 4K+. Build and test it on the Rayfield UI first; moving it to the game's own
@@ -311,3 +326,17 @@ Recent work, newest first:
 - Repo hygiene is done (history rewritten, `.git` ~391 KB, `.gitattributes`
   added). `_gk_backup/gakuran-pre-cleanup-*.bundle` still holds the full old
   history; the user deletes it when satisfied.
+- **Character can stay stuck in keyboard mode after a play (found + reproduced, NOT fixed).**
+  The game never writes `PlayingInstrument` on the client (the server owns it; only the loader
+  does), but `restoreAttributes` writes back the value captured at play start. Repro on v2.0.7
+  (live client, may differ on 2.0.20 because v2.0.15 changed `restoreAttributes`; re-check first):
+  set `PlayingInstrument="Keyboard"` as a stage seat would, `G.load` + `G.play` a chart, clear the
+  attribute mid-play (standing up), let the session end: the loader restores `"Keyboard"` over the
+  server's nil and nothing ever clears it (character keeps the keyboard animation and controls,
+  `Sit=false`). Two more leaks in the same code: a respawn mid-play (old character's values get
+  written onto the new one) and a throw between `saveAndSetAttributes` and `StartPlay` in
+  `playChart` (no restore scheduled). Intended fix: remember what the loader WROTE and only undo a
+  value that still equals it, skip if `player.Character` changed, plus an idle sweeper in the
+  watcher for an override with no play behind it (30 s). A draft against 2.0.7 was discarded, so
+  redo it against the current code. Quick manual cure for a stuck client:
+  `game.Players.LocalPlayer.Character:SetAttribute("PlayingInstrument", nil)`.
