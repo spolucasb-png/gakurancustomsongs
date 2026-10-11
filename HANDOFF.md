@@ -24,13 +24,30 @@ Python-only; do not touch `GakuranChart.lua` for this.
 
 Progress:
 - [x] Found that the converter already skips >4K with a warning (not silent loss).
-- [ ] Study `convert_hitobjects` / `convert_file` (hold handling, `sourceKeys`).
-- [ ] Choose and implement the fold rule (additive; <=4K output must be byte-identical).
-- [ ] Add CLI option (`--fold-keys`) and a `fold` marker in chart JSON (additive field).
-- [ ] Test on real >4K maps: no overlapping notes in one lane, hold integrity, counts.
-- [ ] `python tools/check.py`, commit, update ROADMAP (item 4 / B) and this file.
+- [x] Studied `convert_hitobjects` / `convert_file` (only caller of the former is `convert_file`).
+- [ ] Implement `fold_columns()` in `tools/osu2gakuran.py` (pure function) + hook into `convert_hitobjects`.
+- [ ] `tools/test_fold.py`: offline asserts (no overlap, holds intact, <=4K untouched, determinism).
+- [ ] CLI: fold is the default for keys > lanes; `--no-fold` restores the old skip; `--allow-lossy-keys` stays legacy.
+- [ ] Chart JSON: additive `fold` object (from/to/rerouted/dropped); `sourceKeys` stays the original count.
+- [ ] Run on real maps (list below), eyeball stats, `python tools/check.py`.
+- [ ] Commit; update ROADMAP (item 4 / B) and this file. Loader is NOT changed.
 
-Decisions / findings: (none yet)
+Decisions / findings:
+- Existing bug: `keys = max(1, min(7, keys))` mis-computes columns for 8K-10K
+  (x is encoded for the real key count). Clamp becomes 1..18; <=7K unchanged.
+- Fold rule (one exact rule, integer math): column c of k spans [(c-1)N, cN) in
+  units of 1/k, lane j spans [jk, (j+1)k). Natural lane = largest overlap; an
+  exact tie (e.g. 5K centre, 7K centre, 6K cols 2/5) means two candidate lanes,
+  resolved dynamically toward the least recently used free lane.
+- Conflicts: chronological pass; a lane is busy until a hold's end (or a tap's
+  time) plus FOLD_MIN_GAP_MS. Per same-time group: natural lanes first, then
+  reroute leftovers to the nearest free lane (holds before taps), and drop only
+  if all lanes are busy. Counts are reported and stored in the chart.
+- Output stays mode "Keyboard" with lanes 1..4, so the loader/engine are untouched.
+- Test maps on disk (all osu!mania): `..\_scratch_convert\extract\304864\` (5K
+  maps of "-+"), `..\_scratch_convert\extract\993703\` (Ievan Polkka 7K NSV/SV),
+  `..\madium\Workspace\afn_charts\2FAR_Hard_ALT_057_233.osu` (6K).
+  Convert into a TEMP dir, never into the real GakuranCharts folder.
 
 ## State
 `GakuranChart.lua` is the single loader, **v2.0.17**. Everything below was
