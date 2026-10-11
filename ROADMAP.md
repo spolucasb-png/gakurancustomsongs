@@ -199,6 +199,32 @@ The note under item 3 said the `SubmitStats`/`QueryJamSync` bogus-id probes
   `Init`'s arity rules it out. Worth re-checking if the module ever becomes
   method-style.
 
+### 8c. Rayfield chart list: one row per song — DONE (v2.0.17, `79ddd94`)
+The Charts tab listed every chart file as its own row (13 rows for 7 songs).
+It now lists songs; a second "Difficulty" dropdown appears only for songs with
+several difficulties. This is the Rayfield list only - the wheel keeps its own
+parent rows and submenu (A2/A3) and is untouched.
+- [x] Multi-difficulty songs are marked (`me & u - succducc  [5 diffs]`).
+  Picking one shows the selector, fills it with that song's difficulties
+  (with star ratings) and loads the easiest; a single-difficulty song hides
+  the selector and loads directly.
+- [x] Ordering reuses `sortDiffs`/`chartDensity`, so the list and the wheel
+  agree on which difficulty comes first.
+- [x] Grouped from the chart files, not from `parents`: `injectAllCharts` only
+  fills `parents` when "show custom songs in the wheel" is on, and this list
+  has to work either way.
+- [x] Rayfield's dropdown object only has `:Set`/`:Refresh`, so the selector is
+  shown/hidden through its own Frame (found by name, filtered on the
+  `Selected` child only dropdowns have). If Rayfield's internals change the
+  frame is not found and the selector just stays visible - usable, never
+  broken. Confirmed live: `:Set` fires the Callback, `:Refresh` keeps
+  `CurrentOption`.
+- Live verification: 7 song rows, selector starts hidden; `me & u` shows 5
+  difficulties by star rating and loads `aries' beginner`; switching to
+  `hyper` loads it; a single-difficulty song (Endtest) hides the selector; a
+  2-difficulty song (Ievan Polkka) brings it back with the easiest selected;
+  no console errors; `tools/check.py` passes.
+
 ### 9. Quality-of-life
 - [ ] Retry hotkey and Stop keybind.
 - [ ] Remember per-chart offset automatically; optional tap-to-calibrate.
@@ -211,7 +237,7 @@ The plan is now the parent-row + wheel difficulty submenu design in "Current foc
 - Keep it game-agnostic: Clone Hero (Easy-Expert) and StepMania work the same way.
 
 ### Medium effort
-- [ ] Chart browser: search, sort by difficulty/BPM, cover, artist, note count, favourites. (Natural home for the difficulty switcher.)
+- [ ] Chart browser: search, sort by difficulty/BPM, cover, artist, note count, favourites. (The difficulty switcher now exists as the Rayfield selector, item 8c; this would build on it.)
 - [ ] Song preview: play the osu `PreviewTime` clip on selection.
 - [ ] Multi-mode charts: the format already stores `charts[mode]`, but only `chart.mode` is used. Add a mode picker.
 - [ ] Hit sounds: client-side sound on judgement (`soft-hitnormal.wav` is already in `osz_extract`).
