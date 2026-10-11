@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.16
+    GakuranChart v2.0.17
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.16"
+local VERSION = "2.0.17"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -3082,66 +3082,197 @@ local Tab = Window:CreateTab("Charts", 4483362458)
 local TabOpt = Window:CreateTab("Options", 4483362458)
 
 Tab:CreateSection("Chart Library")
-local chartNames = {}
-local pathByName = {}
-local function refreshChartList()
-    chartNames = {}
-    pathByName = {}
-    for _, f in ipairs(listChartFiles()) do
-        local name = f:match("([^/\\]+)%.json$") or f
-        table.insert(chartNames, name)
-        pathByName[name] = f
+
+-- The list shows one row per SONG, not one per chart file: a song with several
+-- difficulties is a single row, and picking it reveals the difficulty selector
+-- below (the same shape as the in-game wheel's parent rows and submenu).
+--
+-- Grouping is done here from the chart files rather than reusing `parents`,
+-- because injectAllCharts only fills `parents` when the "show custom songs in
+-- the wheel" option is on, and this list has to work either way. Ordering of
+-- difficulties reuses sortDiffs/chartDensity, so the UI and the wheel agree.
+local songEntries = {}     -- { { label, diffs = { { name, label, path, chart, density } } } }
+local songByLabel = {}
+
+local function buildSongList()
+    songEntries, songByLabel = {}, {}
+    local groups, order, skipped = {}, {}, 0
+    for _, path in ipairs(listChartFiles()) do
+        local chart = readChart(path)   -- unreadable charts cannot be played, so skip
+        if chart then
+            -- "\0" prefixes the singles so a chart id can never collide with a songId
+            local key = (type(chart.songId) == "string" and chart.songId ~= "")
+                and chart.songId or ("\0" .. tostring(chart.id))
+            if not groups[key] then
+                groups[key] = {}
+                table.insert(order, key)
+            end
+            table.insert(groups[key], {
+                name = diffName(chart), path = path,
+                chart = chart, density = chartDensity(chart),
+            })
+        else
+            skipped += 1
+        end
     end
-    if #chartNames == 0 then
-        table.insert(chartNames, "(no charts found)")
+
+    for _, key in ipairs(order) do
+        local diffs = groups[key]
+        sortDiffs(diffs)                     -- easiest first, same rule as the wheel
+        for _, d in ipairs(diffs) do
+            d.label = ("%s  (%s%.2f)"):format(d.name, utf8.char(0x2605), starRating(d.chart))
+        end
+        local first = diffs[1].chart
+        local label = first.title or tostring(first.id)
+        if type(first.artist) == "string" and first.artist ~= "" then
+            label = label .. " - " .. first.artist
+        end
+        if #diffs > 1 then
+            label = ("%s  [%d diffs]"):format(label, #diffs)
+        end
+        -- Two different songs can share title and artist; keep rows selectable.
+        local base, dup = label, 2
+        while songByLabel[label] do
+            label = ("%s (%d)"):format(base, dup)
+            dup += 1
+        end
+        local entry = { label = label, diffs = diffs }
+        table.insert(songEntries, entry)
+        songByLabel[label] = entry
     end
-    return chartNames
+    table.sort(songEntries, function(a, b) return a.label:lower() < b.label:lower() end)
+
+    local names = {}
+    for i, e in ipairs(songEntries) do names[i] = e.label end
+    if #names == 0 then names = { "(no charts found)" } end
+    return names, skipped
 end
 
 local infoLabel
 local scoreLabel
-local chartDropdown = Tab:CreateDropdown({
-    Name = "Charts in GakuranCharts/Charts",
-    Options = refreshChartList(),
-    CurrentOption = nil,
-    MultiSelection = false,
-    Callback = function(option)
-        local name = type(option) == "table" and option[1] or option
-        local path = pathByName[name]
-        if not path then return end
-        local chart, err = readChart(path)
-        if not chart then
-            notify("Chart error", err, true)
-            currentChart, currentChartPath = nil, nil
-            return
+local diffDropdown
+local diffFrame            -- the difficulty dropdown's own Frame, for show/hide
+local selectedSong
+
+-- Rayfield's dropdown object exposes only :Set and :Refresh, but the element's
+-- Frame is named after the dropdown, so it can be found and toggled. A
+-- notification can share that name, so candidates are filtered by having the
+-- "Selected" child that only a dropdown has.
+local function findDropdownFrame(name)
+    local gui
+    if type(gethui) == "function" then
+        local okH, h = pcall(gethui)
+        if okH and h then gui = h:FindFirstChild("Rayfield") end
+    end
+    gui = gui or CoreGui:FindFirstChild("Rayfield")
+    if not gui then return nil end
+    for _, d in ipairs(gui:GetDescendants()) do
+        if d.Name == name and d:IsA("GuiObject") and d:FindFirstChild("Selected") then
+            return d
         end
-        currentChart, currentChartPath = chart, path
-        if infoLabel then
+    end
+    return nil
+end
+
+-- Hidden rather than emptied, so a single-difficulty song shows no selector at
+-- all. UIListLayout skips invisible children, so the row collapses cleanly. If
+-- Rayfield's internals ever change, the frame simply is not found and the
+-- selector stays visible - usable, just always on screen.
+local function setDiffSelectorVisible(show)
+    if not diffFrame then diffFrame = findDropdownFrame("Difficulty") end
+    if diffFrame then pcall(function() diffFrame.Visible = show and true or false end) end
+end
+
+local function selectDiff(d)
+    if type(d) ~= "table" or type(d.chart) ~= "table" then return end
+    local chart = d.chart
+    currentChart, currentChartPath = chart, d.path
+    if infoLabel then
+        pcall(function()
             infoLabel:Set(
-                ("%s\n%s | %s BPM | %s notes | %s keys%s"):format(
+                ("%s\n%s | %s | %s BPM | %s notes | %s keys%s"):format(
                     chart.title .. " - " .. (chart.artist or ""),
-                    chart.mode, tostring(chart.bpm), tostring(#chart.charts[chart.mode]),
+                    d.name, chart.mode, tostring(chart.bpm),
+                    tostring(#chart.charts[chart.mode]),
                     tostring((chart.mode == "Guitar") and 2 or 4),
                     ((chart._droppedNotes or 0) > 0)
                         and ("  (" .. chart._droppedNotes .. " invalid notes dropped)") or ""
                 )
             )
+        end)
+    end
+    if scoreLabel then pcall(function() scoreLabel:Set(scoreLine(chart)) end) end
+end
+
+local songDropdown = Tab:CreateDropdown({
+    Name = "Songs in GakuranCharts/Charts",
+    Options = (buildSongList()),
+    CurrentOption = nil,
+    MultiSelection = false,
+    Callback = function(option)
+        local label = type(option) == "table" and option[1] or option
+        local entry = songByLabel[label]
+        if not entry then return end   -- the "(no charts found)" placeholder
+        selectedSong = entry
+        if #entry.diffs > 1 then
+            local labels = {}
+            for i, d in ipairs(entry.diffs) do labels[i] = d.label end
+            setDiffSelectorVisible(true)
+            if diffDropdown then
+                -- :Set fires the dropdown's own Callback, which loads the chart,
+                -- so the easiest difficulty is selected for you.
+                pcall(function() diffDropdown:Refresh(labels) end)
+                pcall(function() diffDropdown:Set(labels[1]) end)
+            else
+                selectDiff(entry.diffs[1])
+            end
+        else
+            setDiffSelectorVisible(false)
+            selectDiff(entry.diffs[1])
+            notify("Chart loaded", entry.diffs[1].chart.title)
         end
-        if scoreLabel then pcall(function() scoreLabel:Set(scoreLine(chart)) end) end
-        notify("Chart loaded", chart.title)
     end,
 })
+
+diffDropdown = Tab:CreateDropdown({
+    Name = "Difficulty",
+    Options = { "-" },
+    CurrentOption = nil,
+    MultiSelection = false,
+    Callback = function(option)
+        local label = type(option) == "table" and option[1] or option
+        if not selectedSong then return end
+        for _, d in ipairs(selectedSong.diffs) do
+            if d.label == label then
+                selectDiff(d)
+                notify("Chart loaded", ("%s [%s]"):format(d.chart.title, d.name))
+                return
+            end
+        end
+    end,
+})
+
+local function refreshSongUI()
+    local opts, skipped = buildSongList()
+    pcall(function() songDropdown:Refresh(opts) end)
+    selectedSong = nil
+    setDiffSelectorVisible(false)
+    return opts, skipped
+end
 
 Tab:CreateButton({
     Name = "Refresh chart list",
     Callback = function()
         local okR, errR = pcall(function()
-            local opts = refreshChartList()
-            chartDropdown:Refresh(opts)
+            local opts, skipped = refreshSongUI()
             if settings.showInWheel then
                 injectAllCharts()  -- pick up newly added chart files
             end
-            notify("Refreshed", #opts .. " chart(s) found")
+            local diffCount = 0
+            for _, e in ipairs(songEntries) do diffCount += #e.diffs end
+            notify("Refreshed", ("%d song(s), %d difficult%s%s"):format(
+                #songEntries, diffCount, diffCount == 1 and "y" or "ies",
+                skipped > 0 and ("  (" .. skipped .. " unreadable, skipped)") or ""))
         end)
         if not okR then notify("Refresh error", tostring(errR), true) end
     end,
@@ -3151,6 +3282,11 @@ infoLabel = Tab:CreateLabel("No chart loaded")
 -- Local best for the loaded chart. Custom plays are never submitted, so this
 -- is the only scoreboard they have.
 scoreLabel = Tab:CreateLabel(scoreLine(currentChart))
+
+-- Nothing is selected at build time, so the selector starts hidden. Deferred
+-- because the element Frames do not exist until Rayfield finishes laying the
+-- tab out.
+task.defer(function() pcall(setDiffSelectorVisible, false) end)
 
 Tab:CreateSection("Playback")
 Tab:CreateButton({
