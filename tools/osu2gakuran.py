@@ -24,6 +24,11 @@ Chart format v1 (GakuranCharts):
     "backgroundFile": "GakuranCharts/Assets/<id>.jpg",  # optional
     "scrollChanges": [{"b": beat, "rate": mult}, ...]   # optional, SV (green lines)
   }
+
+  Maps with more columns than the instrument has lanes (e.g. 5K-10K osu!mania
+  for the 4-lane Keyboard) are folded down to the lane count. Such a chart
+  carries "sourceKeys" (original column count) and "fold": {from, to, source,
+  kept, rerouted, dropped, droppedHolds, duplicates}. See fold_columns().
 """
 import argparse
 import hashlib
@@ -38,6 +43,98 @@ FORMAT_VERSION = 1
 MODE_NAMES = {0: "osu!standard", 1: "osu!taiko", 2: "osu!catch", 3: "osu!mania"}
 # Gakuran instrument modes and their lane counts (from RhythmChartUtil.getLaneCount)
 LANES = {"Keyboard": 4, "Guitar": 2, "Bass": 4, "Drums": 4}
+
+# --- folding maps with more columns than lanes -----------------------------
+# The engine fixes the lane count per instrument (LANES) and the loader only
+# reads lanes 1..N, so an osu!mania map with more columns than lanes is folded
+# down here, at convert time. The game's system is untouched: the output is an
+# ordinary N-lane chart.
+FOLD_MIN_GAP_MS = 25.0   # a lane is unusable this long after a note / hold release
+
+
+def column_lanes(col: int, keys: int, lanes: int):
+    """Where 1-based column `col` of a `keys`-column map goes when folded to
+    `lanes` lanes. Returns (natural, order).
+
+    Exact integer rule: in units of 1/keys the column spans [(col-1)*lanes,
+    col*lanes) and lane j spans [j*keys, (j+1)*keys). The natural lane is the
+    one the column overlaps most; an exact tie (the centre column of 5K/7K/9K,
+    columns 2 and 5 of 6K, ...) yields two natural lanes and the caller picks
+    between them. `order` lists every lane nearest-first, for rerouting."""
+    lo, hi = (col - 1) * lanes, col * lanes
+    overlap = [max(0, min(hi, (j + 1) * keys) - max(lo, j * keys)) for j in range(lanes)]
+    best = max(overlap)
+    natural = tuple(j + 1 for j, o in enumerate(overlap) if o == best)
+    centre2 = lo + hi
+    order = sorted(range(1, lanes + 1), key=lambda L: (abs(centre2 - (2 * L - 1) * keys), L))
+    return natural, order
+
+
+def fold_columns(objs, keys: int, lanes: int, min_gap_ms: float = FOLD_MIN_GAP_MS):
+    """Fold hit objects onto `lanes` lanes.
+
+    objs: [(start_ms, end_ms or None, col)], col 1-based; end_ms is None for a tap.
+    Returns (placed, stats): placed = [(start_ms, end_ms or None, lane)].
+
+    Deterministic, chronological. A lane is busy until a hold's end (or a tap's
+    start) plus min_gap_ms, so no two notes ever share a lane at once. Per
+    start time, every object first takes its natural lane if free (ties go to
+    the least recently used free lane), then leftovers are rerouted to the
+    nearest free lane (holds before taps); an object is dropped only when all
+    lanes are busy."""
+    best = {}
+    duplicates = 0
+    for start, end, col in objs:
+        key = (start, col)
+        if key in best:
+            duplicates += 1
+            old = best[key]
+            if end is not None and (old is None or end > old):
+                best[key] = end
+        else:
+            best[key] = end
+    items = sorted(((k[0], v, k[1]) for k, v in best.items()), key=lambda o: (o[0], o[2]))
+
+    free_at = [float("-inf")] * lanes
+    last_use = [float("-inf")] * lanes
+    placed = []
+    rerouted = dropped = dropped_holds = 0
+
+    def place(lane, start, end):
+        free_at[lane - 1] = (end if end is not None else start) + min_gap_ms
+        last_use[lane - 1] = start
+        placed.append((start, end, lane))
+
+    i = 0
+    while i < len(items):
+        j = i
+        while j < len(items) and items[j][0] == items[i][0]:
+            j += 1
+        group = items[i:j]
+        i = j
+        start = group[0][0]
+        pending = []
+        for o in group:
+            natural, order = column_lanes(o[2], keys, lanes)
+            free = [L for L in natural if free_at[L - 1] <= start]
+            if free:
+                place(min(free, key=lambda L: (last_use[L - 1], L)), start, o[1])
+            else:
+                pending.append((o, order))
+        pending.sort(key=lambda p: (p[0][1] is None, p[0][2]))
+        for o, order in pending:
+            free = [L for L in order if free_at[L - 1] <= start]
+            if free:
+                place(free[0], start, o[1])
+                rerouted += 1
+            else:
+                dropped += 1
+                if o[1] is not None:
+                    dropped_holds += 1
+    stats = {"from": keys, "to": lanes, "source": len(items), "kept": len(placed),
+             "rerouted": rerouted, "dropped": dropped, "droppedHolds": dropped_holds,
+             "duplicates": duplicates}
+    return placed, stats
 
 
 def parse_osu(text: str) -> dict:
@@ -110,10 +207,15 @@ def red_at(reds, time_ms: float):
     return cur if cur else (reds[0] if reds else (0.0, 500.0))
 
 
-def convert_hitobjects(sections: dict, reds, svs, keys: int, mode: int):
-    """Return (notes, warnings). notes = [{b, l, d}] sorted by beat."""
+def convert_hitobjects(sections: dict, reds, svs, keys: int, mode: int,
+                       lanes=None, fold_info=None):
+    """Return (notes, warnings). notes = [{b, l, d}] sorted by beat.
+
+    With lanes set and keys > lanes (osu!mania only) the objects are folded onto
+    `lanes` lanes by fold_columns(); fold_info, if given, receives its stats."""
     notes = []
     warnings = []
+    raw = [] if (mode == 3 and lanes and keys > lanes) else None
     sliders = 0
     skipped_other = 0
     slider_mult = float(meta(sections, "SliderMultiplier", "1.4") or 1.4)
@@ -145,6 +247,9 @@ def convert_hitobjects(sections: dict, reds, svs, keys: int, mode: int):
             if end <= t:
                 skipped_other += 1  # osu! spec: degenerate hold
                 continue
+            if raw is not None:
+                raw.append((t, end, col))
+                continue
             notes.append({
                 "b": round(t / reds[0][1], 4),
                 "l": col,
@@ -164,12 +269,31 @@ def convert_hitobjects(sections: dict, reds, svs, keys: int, mode: int):
                 "d": round(dur_ms / reds[0][1], 4),
             })
         elif htype & 1:  # circle / mania tap
-            notes.append({"b": round(t / reds[0][1], 4), "l": col, "d": 0})
+            if raw is not None:
+                raw.append((t, None, col))
+            else:
+                notes.append({"b": round(t / reds[0][1], 4), "l": col, "d": 0})
         elif htype & 128:  # mania hold w/o parsable end
             skipped_other += 1
         else:  # spinner etc.
             skipped_other += 1
 
+    if raw is not None:
+        placed, stats = fold_columns(raw, keys, lanes)
+        for t, end, lane in placed:
+            notes.append({
+                "b": round(t / reds[0][1], 4),
+                "l": lane,
+                "d": round((end - t) / reds[0][1], 4) if end is not None else 0,
+            })
+        if fold_info is not None:
+            fold_info.update(stats)
+        lost = stats["dropped"]
+        warnings.append(
+            f"folded {keys}K -> {lanes} lanes: {stats['source']} objects, "
+            f"{stats['kept']} kept, {stats['rerouted']} moved to a neighbouring lane, "
+            f"{lost} dropped" + (f" ({stats['droppedHolds']} holds)" if stats["droppedHolds"] else "")
+            + (f", {stats['duplicates']} duplicate(s) merged" if stats["duplicates"] else ""))
     notes.sort(key=lambda n: (n["b"], n["l"]))
     if sliders:
         warnings.append(f"{sliders} slider(s) converted to holds (approximate, standard-mode maps)")
@@ -243,7 +367,7 @@ def place_media(src: Path, dst_dir: Path, base: str) -> Path:
 
 def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path,
                  copy_audio=True, mode_override=None,
-                 include_nonmania=False, allow_lossy_keys=False):
+                 include_nonmania=False, allow_lossy_keys=False, fold_keys=True):
     text = osu_path.read_text(encoding="utf-8", errors="replace")
     sections = parse_osu(text)
 
@@ -260,13 +384,19 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
         print(f"  ! WARNING: {MODE_NAMES.get(mode, mode)} has no good Gakuran equivalent; "
               f"converting as approximate {gakuran_mode}", file=sys.stderr)
     keys = int(float(meta(sections, "CircleSize", "4") or 4))
-    keys = max(1, min(7, keys))
+    # osu!mania goes to 18 columns. (This used to clamp to 7, which mis-placed the
+    # columns of 8K+ maps because x is encoded for the real column count.)
+    keys = max(1, min(18, keys))
     lane_cap = LANES.get(gakuran_mode, 4)
-    if mode == 3 and keys > lane_cap and not allow_lossy_keys:
+    # More columns than lanes: fold down to the lane count (default). The old
+    # lossy path (extra lanes dropped by the loader) is only used when asked for.
+    fold = mode == 3 and keys > lane_cap and fold_keys and not allow_lossy_keys
+    if mode == 3 and keys > lane_cap and not fold and not allow_lossy_keys:
         # The engine has a fixed lane count per instrument and the loader drops
-        # lanes above it, so a >4K map would silently lose notes.
+        # lanes above it, so without folding a >4K map would silently lose notes.
         print(f"  - skipped '{version}': {keys}K exceeds the {lane_cap} lanes of {gakuran_mode} "
-              f"(notes would be lost; pass --allow-lossy-keys to convert anyway)", file=sys.stderr)
+              f"(folding is off; drop --no-fold to fold it, or pass --allow-lossy-keys "
+              f"to convert anyway and lose notes)", file=sys.stderr)
         return None
 
     reds, svs = parse_timing(sections)
@@ -277,7 +407,11 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
     ref_bl = reds[0][1]
     ref_bpm = round(60000.0 / ref_bl, 4)
 
-    notes, warnings = convert_hitobjects(sections, reds, svs, keys, mode)
+    fold_info = {}
+    notes, warnings = convert_hitobjects(sections, reds, svs, keys, mode,
+                                         lanes=lane_cap if fold else None,
+                                         fold_info=fold_info)
+    fold_note = f", folded {keys}K->{lane_cap} lanes" if fold_info else ""
     if not notes:
         print("  ! ERROR: no convertible hit objects", file=sys.stderr)
         return None
@@ -321,7 +455,7 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
         "id": chart_id,
         "title": title,
         "artist": artist,
-        "charter": f"{creator} (osu! {MODE_NAMES.get(mode, mode)} {version}, converted)",
+        "charter": f"{creator} (osu! {MODE_NAMES.get(mode, mode)} {version}, converted{fold_note})",
         "bpm": ref_bpm,
         "animationbpm": ref_bpm,
         "startAt": 0,
@@ -344,6 +478,8 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
         chart["approximate"] = True
     if chart["sourceKeys"] is None:
         del chart["sourceKeys"]
+    if fold_info:
+        chart["fold"] = dict(fold_info)
     if anim_changes:
         chart["animationBpmChanges"] = anim_changes
     if scroll_changes:
@@ -409,11 +545,15 @@ def main():
     ap.add_argument("--include-nonmania", action="store_true",
                     help="also convert osu!standard/taiko/catch maps (approximate)")
     ap.add_argument("--allow-lossy-keys", action="store_true",
-                    help="also convert maps with more keys than lanes (extra lanes are dropped)")
+                    help="legacy: convert maps with more keys than lanes WITHOUT folding "
+                         "(the loader drops the extra lanes, so notes are lost)")
+    ap.add_argument("--no-fold", action="store_true",
+                    help="do not fold maps with more keys than lanes; skip them instead "
+                         "(default: fold them down to the lane count)")
     args = ap.parse_args()
 
     kw = dict(mode_override=args.mode, include_nonmania=args.include_nonmania,
-              allow_lossy_keys=args.allow_lossy_keys)
+              allow_lossy_keys=args.allow_lossy_keys, fold_keys=not args.no_fold)
     inp = args.input
     results = []
     if inp.suffix.lower() == ".osz":

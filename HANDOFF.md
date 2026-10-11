@@ -25,10 +25,10 @@ Python-only; do not touch `GakuranChart.lua` for this.
 Progress:
 - [x] Found that the converter already skips >4K with a warning (not silent loss).
 - [x] Studied `convert_hitobjects` / `convert_file` (only caller of the former is `convert_file`).
-- [ ] Implement `fold_columns()` in `tools/osu2gakuran.py` (pure function) + hook into `convert_hitobjects`.
-- [ ] `tools/test_fold.py`: offline asserts (no overlap, holds intact, <=4K untouched, determinism).
-- [ ] CLI: fold is the default for keys > lanes; `--no-fold` restores the old skip; `--allow-lossy-keys` stays legacy.
-- [ ] Chart JSON: additive `fold` object (from/to/rerouted/dropped); `sourceKeys` stays the original count.
+- [x] Implemented `column_lanes()` / `fold_columns()` in `tools/osu2gakuran.py` + hook into `convert_hitobjects` (patch script: `C:\Users\Administrator\_gk_patch\patch_fold.py`, already applied, do NOT re-run).
+- [x] `tools/test_fold.py`: 8/8 pass (`python tools/test_fold.py`).
+- [x] CLI: fold is the default for keys > lanes; `--no-fold` restores the old skip; `--allow-lossy-keys` stays legacy.
+- [x] Chart JSON: additive `fold` object (from/to/source/kept/rerouted/dropped/droppedHolds/duplicates); `sourceKeys` stays the original count; `charter` gets ", folded 7K->4 lanes".
 - [ ] Run on real maps (list below), eyeball stats, `python tools/check.py`.
 - [ ] Commit; update ROADMAP (item 4 / B) and this file. Loader is NOT changed.
 
@@ -48,6 +48,10 @@ Decisions / findings:
   maps of "-+"), `..\_scratch_convert\extract\993703\` (Ievan Polkka 7K NSV/SV),
   `..\madium\Workspace\afn_charts\2FAR_Hard_ALT_057_233.osu` (6K).
   Convert into a TEMP dir, never into the real GakuranCharts folder.
+- Line endings: `tools/*.py` and `*.md` are LF in git, but the working copies
+  were CRLF; `GakuranChart.lua` is CRLF in the index. A patch script that
+  preserves CRLF on a LF blob makes git show the whole file as changed - write
+  the same EOL as the committed blob (`git ls-files --eol <file>`).
 
 ## State
 `GakuranChart.lua` is the single loader, **v2.0.17**. Everything below was
