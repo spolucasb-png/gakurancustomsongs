@@ -96,6 +96,23 @@ do not re-run blindly): `C:\Users\Administrator\_gk_patch\qua_sv_stats.py`
   clean, user eyeball vs Quaver. Rollback: per-file chart backups (charts are
   regenerable from .qp + committed tools); old clamped charts keep working
   unchanged under the new loader.
+- [x] IMPLEMENTED as v2.0.30 + VERIFIED live (client 14512): shipped
+  `svEarliestVisible` passed an offline differential test vs brute force
+  (spiky/neg/zero/flat/single models, run under the luau CLI on the verbatim
+  shipped functions). Tail pre-check resolved: `rawLen` already clamps at 0,
+  no tail work needed. Loader keeps negatives/zeros verbatim (finite-only
+  filter), same-t collapses pre-sort, spawn branches per chart
+  (`nonPositive` flag; positive path byte-identical). Converters drop the
+  clamp (both qua + osu; non-finite rejected with warning). Reconverted:
+  ball 8468→8618 pts (2142 neg kept, incl. ±4.4M spikes), bozo 6656→8857
+  (3248 neg), halloween 13985 unchanged in count (402 sub-0.05 floors now
+  true 0.01s), day_by_day osu 420 floors now true (non-SV fields identical
+  everywhere). Live: 65 s ball play through the 41–45 s spike zone, 0
+  errors; Ievan 7k_sv regression 107/107, 0 errors; day_by_day loads +
+  models 2352/2352, 0 errors. Scores cleared, attributes restored. DEPLOYED
+  v2.0.30, workspace == repo. Remaining: user eyeball vs real Quaver motion
+  (only a human can judge feel); full-negative loader redesign is DONE here,
+  no follow-up coded.
 
 ### DONE (session 9): hit flash / hit ring orientation fixed in v2.0.29 (user approved 15:57)
 No current task is open from this session. DEPLOYED v2.0.29, workspace == repo.

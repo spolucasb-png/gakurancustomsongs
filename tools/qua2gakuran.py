@@ -150,7 +150,13 @@ def convert_file(qua_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
     svs = sorted(((fnum(i.get("StartTime")), fnum(i.get("Multiplier"), 1.0))
                   for i in lists["SliderVelocities"]), key=lambda p: p[0])
     for t_ms, mult in svs:
-        r = round(max(0.05, min(20.0, mult)), 4)
+        # Rates kept VERBATIM (negatives, zero, extremes): the loader model
+        # handles them (spawn branches on non-positive presence); only
+        # non-finite values are rejected. Rounding + last-in-file collapse stay.
+        if mult != mult or abs(mult) == float("inf"):
+            warnings.append(f"non-finite SV {mult} at {t_ms}ms skipped")
+            continue
+        r = round(mult, 4)
         b = round(t_ms / ref_bl, 4)
         if scroll_changes and scroll_changes[-1]["b"] == b:
             # Same grid instant: identical ms, or distinct ms values rounding

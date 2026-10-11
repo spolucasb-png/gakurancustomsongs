@@ -406,6 +406,12 @@ parent rows and submenu (A2/A3) and is untouched.
   → verify (model builds, 0 errors, live-Y vs sim, Ievan regression,
   eyeball). Scratch:
   `_gk_patch/qua_sv_stats.py`, `_gk_patch/qua_sv_sim.py` (outside the repo).
+- [x] IMPLEMENTED v2.0.30 + VERIFIED live (client 14512, DEPLOYED, workspace
+  == repo): scan function differentially tested vs brute force under luau;
+  tail pre-check resolved (rawLen clamps at 0, no work needed); ball 65 s
+  play through spike zone 0 errors, Ievan regression 107/107 clean, osu
+  day_by_day 420 floors restored + verified, scores cleared. Remaining:
+  user eyeball vs Quaver feel.
 
 ## Later / future add-ons
 

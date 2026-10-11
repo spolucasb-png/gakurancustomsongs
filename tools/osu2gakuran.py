@@ -463,7 +463,12 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
     # last in file wins, like the game. Consecutive equal rates collapse.
     scroll_changes = []
     for t_ms, mult in svs:
-        r = round(max(0.05, min(20.0, mult)), 4)
+        # Rates kept VERBATIM (see qua2gakuran): the loader model handles
+        # negatives/zero/extremes; only non-finite values are rejected.
+        if mult != mult or abs(mult) == float("inf"):
+            warnings.append(f"non-finite SV {mult} at {t_ms}ms skipped")
+            continue
+        r = round(mult, 4)
         b = round(t_ms / ref_bl, 4)
         if scroll_changes and scroll_changes[-1]["b"] == b:
             scroll_changes[-1] = {"b": b, "rate": r}

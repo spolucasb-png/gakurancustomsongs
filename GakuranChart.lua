@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.29
+    GakuranChart v2.0.30
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.29"
+local VERSION = "2.0.30"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -2398,17 +2398,34 @@ local function buildSvModel(chart, song)
     -- (song.offsetMs is deliberately NOT part of it - buildSecondsChart
     -- doesn't take it either.)
     local base = (tonumber(song.startAt) or 0) + (tonumber(song.chartDelay) or 0)
+    -- Rates are kept VERBATIM (negatives, zero, extremes): frame positioning
+    -- is pure integral math and handles any rate, and the spawn pass branches
+    -- on model.nonPositive (invert path vs earliest-visible scan). Only
+    -- non-finite values are rejected (they would poison the integral).
+    -- Same grid instant twice collapses to the LAST chart-file entry BEFORE
+    -- sorting (Lua sort is not stable), matching Quaver semantics; converted
+    -- charts already guarantee this, this covers hand-made ones.
     local list = {}
     for _, c in ipairs(changes) do
         local b = tonumber(type(c) == "table" and c.b or nil)
         local r = tonumber(type(c) == "table" and c.rate or nil)
-        if b and r and r > 0 then
-            list[#list + 1] = { t = base + (60 / bpm) * b, r = math.clamp(r, 0.05, 20) }
+        if b and r and r == r and math.abs(r) ~= math.huge then
+            list[#list + 1] = { t = base + (60 / bpm) * b, r = r }
         end
     end
-    table.sort(list, function(x, y) return x.t < y.t end)
-    local pts, rates = {}, {}
+    local deduped = {}
     for _, e in ipairs(list) do
+        if #deduped > 0 and deduped[#deduped].t == e.t then
+            deduped[#deduped] = e
+        else
+            deduped[#deduped + 1] = e
+        end
+    end
+    table.sort(deduped, function(x, y) return x.t < y.t end)
+    local pts, rates = {}, {}
+    local nonPositive = false
+    for _, e in ipairs(deduped) do
+        if e.r <= 0 then nonPositive = true end
         -- drop boundaries where the rate does not actually change
         if #rates == 0 or math.abs(rates[#rates] - e.r) > 1e-6 then
             pts[#pts + 1] = e.t
@@ -2420,13 +2437,13 @@ local function buildSvModel(chart, song)
     for i = 2, #pts do
         prefix[i] = prefix[i - 1] + (pts[i] - pts[i - 1]) * rates[i - 1]
     end
-    return { pts = pts, rates = rates, prefix = prefix }
+    return { pts = pts, rates = rates, prefix = prefix, nonPositive = nonPositive }
 end
 
 -- Invert the piecewise-linear integral: largest ts with I(ts) <= V.
--- Rates are clamped to [0.05, 20], so I is strictly increasing and the
--- inverse is unique. Mirrors svIntegral's implicit rate-1 region before
--- the first change point.
+-- Only called for positive-rate models (see the branch in svApplySpawns),
+-- where I is strictly increasing and the inverse is unique. Mirrors
+-- svIntegral's implicit rate-1 region before the first change point.
 local function svInvertIntegral(m, V)
     local pts = m.pts
     local n = #pts
@@ -2445,6 +2462,57 @@ local function svInvertIntegral(m, V)
     return pts[lo] + (V - m.prefix[lo]) / m.rates[lo]
 end
 
+-- Earliest time a note is within visible SV-distance: for models with a
+-- non-positive rate anywhere, where the integral is not monotonic and
+-- inversion is undefined. Walks breakpoints ascending with exact linear
+-- solves (no binary search, no division by rate), so zero and negative
+-- rates behave: zero-rate stretches qualify whole, reversed stretches
+-- qualify where the V-shaped distance dips back in range. Returns t itself
+-- at the latest (distance 0 always qualifies), so callers can min() it with
+-- the vanilla spawn exactly like the invert path.
+local function svEarliestVisible(m, t, lim, tMin)
+    local pts, rates, n = m.pts, m.rates, #m.pts
+    if n == 0 then return t end
+    local It = svIntegral(m, t)
+    local function rateAt(x)
+        if x < pts[1] then return 1 end
+        local lo, hi = 1, n
+        while lo < hi do
+            local mid = (lo + hi + 1) // 2
+            if pts[mid] <= x then lo = mid else hi = mid - 1 end
+        end
+        return rates[lo]
+    end
+    local prevT = tMin
+    local prevI = svIntegral(m, tMin)
+    if math.abs(It - prevI) <= lim then return tMin end
+    local i = 1
+    while i <= n and pts[i] <= tMin do i += 1 end
+    while true do
+        local curT = (i <= n) and pts[i] or t
+        if curT > t then curT = t end
+        if curT > prevT then
+            local R = rateAt(prevT)
+            local cand = nil
+            if R == 0 then
+                if math.abs(It - prevI) <= lim then cand = prevT end
+            else
+                local t1 = prevT + ((It - lim) - prevI) / R
+                local t2 = prevT + ((It + lim) - prevI) / R
+                local a = math.min(t1, t2)
+                local b = math.max(t1, t2)
+                if a <= curT and b >= prevT then cand = math.max(a, prevT) end
+            end
+            if cand ~= nil then return cand end
+            prevI = prevI + R * (curT - prevT)
+            prevT = curT
+        end
+        i += 1
+        if curT >= t then break end
+    end
+    return t
+end
+
 -- Rewrite per-note .spawn times so slow-SV notes exist before they become
 -- visible. Target: the time ts with I(ts) = I(t) - D/S, where D is the
 -- visible SV-distance derived from the engine's own lead
@@ -2452,14 +2520,15 @@ end
 -- (lead - 0.15)*S is the exact edge distance whenever lead < approach).
 --   spawn = max(t - maxLead, min(t - lead, ts))
 -- min() keeps fast-SV regions (and flat-rate charts) exactly vanilla.
--- Ordering: t - maxLead, t - lead and ts(t) are all non-decreasing in t
--- (dts/dt = rate(t)/rate(ts) > 0), and the engine keeps _liveNotes in t
--- order, so the rewritten list stays sorted - required by the spawn
--- loop's break-on-first-not-due and by lowerBoundSpawn. We never re-sort:
--- _nextSpawn is an index into this array. The concurrency pass below only
--- ever pushes spawns later and each note is also clamped to the previous
--- note's final spawn, so sortedness holds by construction; violations are
--- counted, not tolerated.
+-- Ordering: on the invert path t - maxLead, t - lead and ts(t) are all
+-- non-decreasing in t (dts/dt = rate(t)/rate(ts) > 0); on the scan path ts
+-- is arbitrary but every value still passes through the clamp-to-prev
+-- below, so the rewritten list stays sorted either way - required by the
+-- spawn loop's break-on-first-not-due and by lowerBoundSpawn. We never
+-- re-sort: _nextSpawn is an index into this array. The concurrency pass
+-- below only ever pushes spawns later and each note is also clamped to the
+-- previous note's final spawn, so sortedness holds by construction;
+-- violations are counted, not tolerated.
 -- Runs from the persistent frame (after the engine's step each frame):
 -- once per session, and again whenever the engine overwrites .spawn,
 -- detected via _spawnLead value or _liveNotes identity (_refreshSpawnLead
@@ -2498,7 +2567,16 @@ local function svApplySpawns(sess, m, S)
             if type(kept) == "number" and kept > prev then prev = kept end
         else
             local vanilla = t - lead
-            local ts = svInvertIntegral(m, svIntegral(m, t) - D / S)
+            -- Positive-rate models keep the exact v2.0.29 inversion; models
+            -- with any non-positive rate use the earliest-visible scan
+            -- (inversion is undefined there). Both feed the same floors,
+            -- order clamps and concurrency cap below.
+            local ts
+            if m.nonPositive then
+                ts = svEarliestVisible(m, t, D / S, t - svSpawnMaxLead)
+            else
+                ts = svInvertIntegral(m, svIntegral(m, t) - D / S)
+            end
             local s = vanilla
             if ts < s then s = ts end
             local floor = t - svSpawnMaxLead
