@@ -47,8 +47,14 @@ image icons. User accepts the wheel-skin-injection update-fragility risk.
   wrap paths + v1 migration, wheelRev 3→4. Verified through the real wrap:
   list 8 icons, submenu 0, list again 8, 0 stacked. Note: a direct
   renderMenu call bypasses the wrap (sweep never runs) — always test the
-  submenu through wb.wrap/pending, not renderMenu directly.
-- Star-badge DiffTier-nil probe (session 6) still queued alongside.
+  submenu through wb.wrap/pending, not renderMenu directly. Same trap once
+  more: hand-setting pending without armWheelMenu leaves renderMenu nil (base
+  path renders) — test submenus via G.openPicker.
+- [x] v2.0.24 (user eyeball: parents iconless, search-row wrong icon). Causes:
+  parent Diff frames are hidden (icons existed but invisible); search rows
+  bypass the list wrap (stale slot-reuse icons). Fix: 3-home paint (Diff /
+  Len / Root), new WheelSearch slot on _renderSearchResults, wheelRev 4→5.
+  Verified list 8/8 visible with correct homes+assets, search pink, submenu 0.
 - Star-badge DiffTier-nil probe (session 6) still queued alongside.
 
 ### Session 5 (2026-10-11): stage keyboard guard (v2.0.21), chart import answer

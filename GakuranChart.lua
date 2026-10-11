@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.23
+    GakuranChart v2.0.24
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.23"
+local VERSION = "2.0.24"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -752,10 +752,26 @@ function HK.makeWheelListMenu(b)
         return table.unpack(res, 1, res.n)
     end
 end
+-- Search-results renderer wrapper: search rows reuse the same slot frames
+-- (a stale list-page icon would otherwise stand beside the wrong song), so
+-- the same sweep-and-paint runs here. Same discipline: record-only upvalues,
+-- deferred (results may settle after the call returns), returns untouched.
+function HK.makeWheelSearchRender(b)
+    return function(self, ...)
+        local res = table.pack(b.under(self, ...))
+        task.defer(function()
+            paintWheelSourceIcons(self, true)
+            task.wait(0.5)
+            paintWheelSourceIcons(self, true)
+        end)
+        return table.unpack(res, 1, res.n)
+    end
+end
+HK.searchRev = 1
 -- Wrapper-body revision for the WheelMenu hook: bump whenever
 -- HK.makeWheelListMenu changes, or a client that already holds a record keeps
 -- running the OLD body (rev 1 = first body that counts renders).
-HK.wheelRev = 4
+HK.wheelRev = 5
 do
     local c = findWheelController()
     -- getgc(true) enumeration is non-deterministic: five identical scans in a
@@ -771,6 +787,7 @@ do
     end
     if c then
         HK.ensure("WheelMenu", c, "_applySongListMenu", HK.makeWheelListMenu, HK.wheelRev)
+        HK.ensure("WheelSearch", c, "_renderSearchResults", HK.makeWheelSearchRender, HK.searchRev)
     elseif _G.GakuranChartGen == MYGEN then
         warn("[GakuranChart] Wheel controller not found - difficulty picker falls back to overlay")
     end
@@ -785,6 +802,7 @@ local function armWheelMenu()
     findWheelController(true)
     if wheelCtl then
         HK.ensure("WheelMenu", wheelCtl, "_applySongListMenu", HK.makeWheelListMenu, HK.wheelRev)
+        HK.ensure("WheelSearch", wheelCtl, "_renderSearchResults", HK.makeWheelSearchRender, HK.searchRev)
     end
     local wb = hookBase["WheelMenu"]
     if type(wb) == "table" then
@@ -961,13 +979,15 @@ local function sourceIconAsset(src)
     return nil
 end
 
--- Wheel-row source icons (session 7): after the game's list renderer builds
--- the rows, tag OUR rows (title prefix) with a small icon left of the Diff
--- badge. Everything is runtime-derived (Diff anchor/position) and pcall-
--- guarded: an unfamiliar skin simply gets no icon. Rows are rebuilt on every
--- open, so icons never outlive their row; the name check keeps one render
--- pass from stacking. Runs on the base-render path only (our submenu slots
--- carry untagged difficulty names, so they never match anyway).
+-- Wheel-row source icons (session 7): after a game renderer builds rows,
+-- tag OUR rows (title prefix) with a small icon beside the right cluster.
+-- Home depends on the row shape, all runtime-derived and pcall-guarded:
+-- a visible real badge -> child of the Diff frame (rides hover tweens, fixed
+-- gap left of the frame, verified 6.8px / 11.4px-follow live); badgeless rows
+-- (parents: Diff frame exists but hidden, 15px) -> child of Len (which always
+-- shows the duration); missing Len -> Root at the badge zone. An unfamiliar
+-- skin simply gets no icon. Sweep covers all three homes every pass, so a
+-- slot reused by another page (submenu, search) never keeps a stale icon.
 paintWheelSourceIcons = function(self, doAdd)
     local okS, slots = pcall(function() return self._slots end)
     if not (okS and type(slots) == "table") then return end
@@ -981,36 +1001,45 @@ paintWheelSourceIcons = function(self, doAdd)
             local V = s.V
             local root = type(V) == "table" and V.Root or nil
             local diff = type(V) == "table" and V.Diff or nil
-            local haveRoot = typeof(root) == "Instance"
-            local haveDiff = typeof(diff) == "Instance"
-            -- sweep first, every pass: a slot reused by another page (submenu,
-            -- search) must never keep our icon, and v1 Root-parented icons
-            -- migrate to the Diff frame below
-            if haveRoot then
-                local stale = root:FindFirstChild("GakuranSrcIcon")
-                if stale then stale:Destroy() end
+            local len = type(V) == "table" and V.Len or nil
+            local function killAll()
+                if typeof(root) == "Instance" then
+                    local o = root:FindFirstChild("GakuranSrcIcon")
+                    if o then o:Destroy() end
+                end
+                if typeof(diff) == "Instance" then
+                    local o = diff:FindFirstChild("GakuranSrcIcon")
+                    if o then o:Destroy() end
+                end
+                if typeof(len) == "Instance" then
+                    local o = len:FindFirstChild("GakuranSrcIcon")
+                    if o then o:Destroy() end
+                end
             end
-            if haveDiff then
-                local stale = diff:FindFirstChild("GakuranSrcIcon")
-                if stale and (not src or not doAdd) then stale:Destroy() end
-                if not src or not doAdd then return end
-                if diff:FindFirstChild("GakuranSrcIcon") then return end
-                -- right-anchored badge only; any other layout is left alone
-                local dp = diff.Position
-                if dp.X.Scale ~= 1 then return end
-                -- child of the badge itself: follows it through hover tweens,
-                -- and a fixed gap left of the frame can never overlap it
-                local img = Instance.new("ImageLabel")
-                img.Name = "GakuranSrcIcon"
-                img.AnchorPoint = Vector2.new(1, 0.5)
-                img.Position = UDim2.new(0, -6, 0.5, 0)
-                img.Size = UDim2.fromOffset(16, 16)
-                img.BackgroundTransparency = 1
-                img.BorderSizePixel = 0
-                local iconAsset = sourceIconAsset(src)
-                if type(iconAsset) == "string" then img.Image = iconAsset end
-                img.Parent = diff
+            if not src or not doAdd then killAll() return end
+            local home, pos = nil, nil
+            if typeof(diff) == "Instance" and diff.Visible == true
+                and diff.AbsoluteSize.X >= 30
+                and diff.Position.X.Scale == 1 then
+                home, pos = diff, UDim2.new(0, -6, 0.5, 0)
+            elseif typeof(len) == "Instance" and len.Visible == true then
+                home, pos = len, UDim2.new(0, -6, 0.5, 0)
+            elseif typeof(root) == "Instance" then
+                home, pos = root, UDim2.new(1, -20, 0.5, 0)
+            else
+                killAll() return
             end
+            killAll()
+            local img = Instance.new("ImageLabel")
+            img.Name = "GakuranSrcIcon"
+            img.AnchorPoint = Vector2.new(1, 0.5)
+            img.Position = pos
+            img.Size = UDim2.fromOffset(16, 16)
+            img.BackgroundTransparency = 1
+            img.BorderSizePixel = 0
+            local iconAsset = sourceIconAsset(src)
+            if type(iconAsset) == "string" then img.Image = iconAsset end
+            img.Parent = home
         end)
     end
 end
@@ -2594,7 +2623,7 @@ function HK.restore()
     local base = _G.GakuranChartHookBase
     if type(base) ~= "table" or base.version ~= HOOK_BASE_VERSION then return true end
     local allGone = true
-    for _, name in ipairs({ "SubmitStats", "QueryJamSync", "FireStart", "ListPlayableSongInfosForHeld", "StartPlay", "WheelMenu", "DiffKey", "DiffTier",
+    for _, name in ipairs({ "SubmitStats", "QueryJamSync", "FireStart", "ListPlayableSongInfosForHeld", "StartPlay", "WheelMenu", "WheelSearch", "DiffKey", "DiffTier",
                           "ResolvePlayable", "ViewTheme", "HintLabels", "KeyMap", "ViewNew" }) do
         local b = base[name]
         if type(b) == "table" and type(b.mod) == "table" and type(b.wrap) == "function" then
@@ -4242,7 +4271,7 @@ _G.GakuranChart = {
         local hooks = {}
         for _, name in ipairs({ "SubmitStats", "QueryJamSync", "FireStart",
                                 "ListPlayableSongInfosForHeld", "DiffKey",
-                                "DiffTier", "StartPlay", "WheelMenu",
+                                "DiffTier", "StartPlay", "WheelMenu", "WheelSearch",
                                 "ResolvePlayable", "ViewTheme", "HintLabels", "KeyMap", "ViewNew" }) do
             local b = hookBase[name]
             if type(b) ~= "table" then

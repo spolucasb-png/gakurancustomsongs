@@ -280,6 +280,14 @@ parent rows and submenu (A2/A3) and is untouched.
   (6px left of the badge — overlap gone, hover-follow structural), sweep on
   both wrap paths (submenu shows 0 stale icons, list restores 8/8, 0 stacked).
   Live-verified on client 14512; user eyeball still pending.
+- [x] v2.0.24 (wheelRev 5 + new WheelSearch slot, rev 1): parent rows use the
+  Len frame (their Diff badge is hidden 15px — icons are instances but
+  invisible there), search rows painted via _renderSearchResults wrap (killed
+  the blue-on-SOUND-ARCHITECT stale). Verified: list 8/8 visible (singles
+  @Diff, parents @Len, correct pink/blue assets), search pink, real-path
+  submenu 0, diag clean. Probe lesson: driving wb.wrap with hand-set pending
+  skips armWheelMenu (renderMenu nil → base path) — test submenus via
+  G.openPicker, not raw wrap calls.
 
 ## Later / future add-ons
 
