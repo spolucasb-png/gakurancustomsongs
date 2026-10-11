@@ -1,40 +1,60 @@
 # Handoff (for the next chat session)
 
 ## State
-`GakuranChart.lua` is the single loader again (v2.0.11). The temporary copies
-`GakuranChart_v2.0.9.lua` / `GakuranChart_v2.0.10.lua` were folded into it and
-removed (they stay in git history). The earlier file lock on `GakuranChart.lua`
-is gone.
+`GakuranChart.lua` is the single loader, **v2.0.15**. Everything below was
+verified live on placeVersion 7646 (Madium 2.0.0) before being committed.
 
-Recent loader changes (see `git log` for the live-test notes of each):
-- v2.0.9: wheel submenu slot title star-first (superseded by 2.0.11).
-- v2.0.10: single-difficulty custom songs get a star label ("★5.32") as their
-  wheel difficulty. Two HookBase wrappers: `DiffKey` (RhythmDifficulty.Key maps a
-  star label to its tier colour) and `DiffTier` (RhythmWheelKit.tier returns the
-  label itself as the chip word; the skins draw tier(diff).word, not the raw
-  text). User confirmed the badges look right in the wheel list.
-- v2.0.11: multi-difficulty submenu slots use the same chip (`art.diff` = star
-  label); the title is just the difficulty name. Verified by rendering the real
-  submenu page through the live skin (chip text and colours correct); NOT yet
-  eyeballed by the user in the open wheel.
+Recent work, newest first:
+- **v2.0.15 — instrument no longer stays equipped through the end screen.**
+  Reported from play. `restoreAttributes` now writes with three engine teardown
+  listeners suppressed (`stopIfInvalidContext`, `recheck@RhythmWheelServiceClient`,
+  `sync@InstrumentServiceClient`), so the unequip goes through while the results
+  screen survives; `surfaceStillUp` no longer waits on `_resultsScreen`. See
+  ROADMAP 9b for the four experiments that pinned it down.
+- **v2.0.14 — single-pass `getgc`.** One heap sweep instead of nine.
+  1.695 s -> 0.566 s on a ~2M-object heap. Validated by `diag()` output being
+  identical to the v2.0.13 baseline.
+- **v2.0.13 — `diag()`.** Startup self-test: getgc targets, service state and
+  methods, per-hook-slot status, counts, settings, summary line.
+- **v2.0.12 — ROADMAP section 5 small fixes** (note sort, `notify` reaching
+  Rayfield, image background dim, per-chart `offsetMs`, the `getfenv` guard,
+  `SKINS_DIR`) plus the converter's chart-id collision fix.
 
 ## Workflow
-- Loader runs from the executor workspace
-  `C:\Users\Administrator\AppData\Local\Madium\Workspace` (copy the repo file
-  there, then `run_executor_file`). `_G.GakuranChart` holds the API
-  (`openPicker`, `pickerStatus`, `svStatus`, `visStatus`, `list`, `setSkin`...).
+- **Always `python tools/check.py` (or `tools/deploy.py`, which runs it) before
+  deploying.** It parse-checks the loader offline with the `luau` CLI, compiles
+  the Python tools and validates chart/skin JSON. `rokit add --global
+  luau-lang/luau` if `luau` is missing.
+- `python tools/deploy.py --name <label>` copies the loader to the workspace as
+  `GakuranChart_<label>_candidate.lua` (keeps the known-good copy); `--live`
+  overwrites `GakuranChart.lua`; `--clean` deletes stale candidates.
+- Workspace is `C:\Users\Administrator\AppData\Local\Madium\Workspace`; run a
+  candidate with `run_executor_file`.
+- `_G.GakuranChart` holds the API (`diag`, `openPicker`, `pickerStatus`,
+  `svStatus`, `visStatus`, `list`, `setSkin`, ...). **`diag()` first** when
+  something looks wrong - it names the piece that moved.
 - The wheel only renders while an instrument is held. To test a submenu page
-  without it, call `_G.GakuranChartHookBase.WheelMenu.renderMenu(controller, "me_u")`
-  with the controller found via getgc (table with `_slots` and `_menuPage`) and read
+  without one, call
+  `_G.GakuranChartHookBase.WheelMenu.renderMenu(controller, "me_u")` with the
+  controller found via getgc (table with `_slots` and `_menuPage`) and read
   `controller._slots[i].Data / .V.DiffText.Text`.
+- `GakuranCharts/Charts/test_end.json` is a 28 s chart - the right thing to
+  play when a test needs a full song-end, results screen and stats call.
 
 ## Still open / not verified
-- Submenu chip not yet seen on screen; pill width with long names unchecked.
-- Select-flash colour, physical wheel click, full pick->play->stop cycle on the
-  current build, overlay/submenu exclusion with a real overlay.
-- Character can stay stuck in keyboard mode after a stage or forced chart play.
+- Submenu chip still not eyeballed on screen by the user; pill width with long
+  names unchecked.
+- Select-flash colour, physical wheel click, full pick->play->stop cycle,
+  overlay/submenu exclusion with a real overlay.
 - Real stage play with the SV-spawn / skin-visual passes (never forced live).
-- Skin visuals (hold head, pressed receptor, per-lane taps) and SV-aware spawn are
-  done (`3b4358f`, `d35b546`, `578c2d8`).
-- Leftover test junk in the executor workspace: `GakuranCharts/Skins/zz_vis_*` (if
-  present) and the many `GakuranChart_*_candidate.lua` files (safe to delete).
+- `SubmitStats` args 3 and 4 are still unidentified - they were 0/nil on a
+  capture run that took no input. Identify them from a played run before local
+  scores relies on them (ROADMAP 8 has the full captured shape).
+- Local scores (ROADMAP 8) is designed but not built: record via a
+  `b.scoreHandler` on the base record plus a `HK.submitRev`.
+- The `>4K` fold (ROADMAP B) and tier colours (A4) are untouched.
+- Repo hygiene: `.git` is ~52 MB because beatmap archives, a 9 MB mp3 and a
+  10 MB converter .exe are tracked, and `GakuranChart - Copy just in case.lua`
+  is a v1.0 file superseded by 27+ commits of history. No remote yet, so this
+  is the cheap moment to fix it. There is also no `.gitattributes`, so line
+  endings churn (CRLF warnings on commit).

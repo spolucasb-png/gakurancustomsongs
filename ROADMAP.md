@@ -142,8 +142,44 @@ Order: A1.5, then A1, A2, A3. A1 is Python-only and cannot regress the loader, s
   it now.
 
 ### 8. Local scores (`Scores.json`)
-- [ ] First capture what `SubmitStats` actually receives for a custom song (via Madium). Don't guess the payload shape.
+- [x] **Payload captured live** (2026-10-11, placeVersion 7646) by recording at
+  the guard wrapper during a real `test_end` play, delegating so the guard still
+  swallowed it. `RhythmStatsClient.SubmitStats` takes 5 args:
+
+  | # | type | value seen | meaning |
+  | --- | --- | --- | --- |
+  | 1 | string | `"test_end"` | song id |
+  | 2 | string | `"Keyboard"` | mode / instrument |
+  | 3 | number | `0` | unidentified (0 on a no-input run) |
+  | 4 | nil | `nil` | unidentified (absent on this run) |
+  | 5 | table | `{Clutch=0, Hits=0, Judged=27, MaxCombo=0, Score=0}` | the stats |
+
+  Args 1, 2 and 5 are unambiguous and are all the feature needs (accuracy =
+  `Hits/Judged`, misses = `Judged - Hits`). Args 3 and 4 stayed 0/nil because
+  the capture run took no input; identify them from a played run before relying
+  on them. `QueryJamSync` was also seen firing twice with the custom id and
+  being correctly swallowed.
 - [ ] Save best score, accuracy and combo per chart locally. Never sent anywhere.
+  The guard wrapper is the place to do it, via a `b.scoreHandler` on the base
+  record (same discipline as `b.handler` on StartPlay) plus a `HK.submitRev` so
+  an older wrapper body gets rebuilt on re-execution rather than silently
+  recording nothing.
+
+### 8b. Safety net: call conventions now verified (was an open caveat)
+The note under item 3 said the `SubmitStats`/`QueryJamSync` bogus-id probes
+"were not independently decisive". They are now:
+- `stats.Init` takes **0** params, so the stats module is static
+  (`function M.Init()`, not `M:Init()`) - therefore the genuine
+  `SubmitStats(songId, ...)` really does take the song id first and the
+  loader's `function(songId, ...)` wrapper is correctly shaped.
+- `relay.QueryJamSync` and `relay.FireStart` are 1-param plain calls, matching
+  their wrappers; `service.StartPlay` is 4-param method-style, matching
+  `makeStartPlay`'s leading `self`.
+- Demonstrated live that an engine-shaped call (plain, custom id) does **not**
+  reach the genuine original, with a recorder standing in for it. A synthetic
+  method-style call *does* slip past the guard, but the engine never makes one -
+  `Init`'s arity rules it out. Worth re-checking if the module ever becomes
+  method-style.
 
 ### 9. Quality-of-life
 - [ ] Retry hotkey and Stop keybind.
@@ -177,7 +213,41 @@ The plan is now the parent-row + wheel difficulty submenu design in "Current foc
 - Check Rayfield window and toggle key with touch (mobile has no keyboard).
 - Game updates are the biggest long-term risk: the loader depends on private fields. Step 6 is the insurance.
 
-## Known limits (from SESSION_NOTES.md)
+### 9b. Instrument stayed equipped through the end screen — DONE (v2.0.15)
+Reported from play: the keyboard did not leave the character's hands when a
+song finished. Root cause, found live: clearing `PlayingInstrument` is what
+unequips (`KeyboardClient.evaluateLocal` listens on it), but the same attribute
+change also drives `RhythmServiceClient.stopIfInvalidContext`, which calls
+`Stop()` and destroys a results screen that is still displayed. The v1.1 fix
+avoided that by waiting for the results screen to be dismissed first - so the
+instrument stayed in hand for the whole end screen.
+
+What the live experiments established, in order:
+1. Clearing the attribute with `_session`/`_view` already nil **still** destroys
+   the results screen, so narrowing the wait to session+view does not work.
+   `stopIfInvalidContext` acts on the attribute alone.
+2. Suppressing only `stopIfInvalidContext` was **not** enough - the screen still
+   died. `Disable()` was confirmed effective (`Enabled` true -> false -> true),
+   so another listener was responsible.
+3. Unmasking the `Profiled` decorator (the connection reports the decorator's
+   source, not its target) named the other two: `recheck@RhythmWheelServiceClient`
+   and `sync@InstrumentServiceClient`.
+4. Suppressing those three - and letting every other listener, including
+   `KeyboardClient.evaluateLocal`, see the change - unequips the character AND
+   leaves the results screen standing.
+
+Implemented as `withContextTeardownSuppressed`, which `restoreAttributes` wraps
+its writes in; `surfaceStillUp` no longer counts `_resultsScreen`. Matching is
+by the wrapped function's name, never by connection index, the window is one
+frame on our own restore path, and the listeners are re-enabled unconditionally
+including when the write throws. No `getconnections` -> suppression is skipped
+and the old behaviour applies.
+
+Verified live through the loader's own watcher: song ended t+33.1s, results
+screen up t+33.1s, `PlayingInstrument` cleared t+33.6s, results screen still
+up afterwards, 7/7 suppressed listeners re-enabled.
+
+## Known limits
 - Custom stage lighting isn't implementable: the engine has no lighting slots, only flash/ring pools.
 - Flash/ring matching is possible but marginal (deferred).
 - The day_by_day audio file was overwritten once; the overwriter was never identified.

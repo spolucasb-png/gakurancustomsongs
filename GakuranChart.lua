@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.14
+    GakuranChart v2.0.15
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.14"
+local VERSION = "2.0.15"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -840,6 +840,82 @@ end
 -- mid-play and the server cleared PlayingInstrument), writing our captured
 -- value back would resurrect a stale "Keyboard" that nothing ever clears
 -- again (the character then stays in keyboard animation/controls off-chart).
+-- Clearing PlayingInstrument is what actually takes the instrument out of the
+-- player's hands: KeyboardClient.evaluateLocal (and the Drums/Piano
+-- equivalents) listen on that attribute. But the SAME attribute change also
+-- drives three teardown listeners - RhythmServiceClient.stopIfInvalidContext,
+-- RhythmWheelServiceClient.recheck and InstrumentServiceClient.sync - and
+-- stopIfInvalidContext calls Stop(), which destroys a results screen that is
+-- still on display. That coupling is why the loader used to wait for the
+-- results screen to go away before restoring, leaving the character holding
+-- the keyboard for as long as the end screen was up.
+--
+-- So suppress just those three for the duration of the write and let every
+-- other listener (the ones that do the unequip) see it. Verified in-game: the
+-- character unequips immediately on song end AND the results screen survives.
+-- Suppressing only stopIfInvalidContext is NOT enough - the screen still died,
+-- which is how the other two were found.
+--
+-- The window is a single frame on our own restore path, and the listeners are
+-- re-enabled unconditionally, including when the write throws. Each is matched
+-- by the name of the function its Profiled decorator wraps, never by index.
+-- Without getconnections the suppression is skipped and the old
+-- wait-for-the-results-screen behaviour applies.
+local CONTEXT_TEARDOWN = {
+    stopIfInvalidContext = true,   -- RhythmServiceClient -> Stop()
+    recheck = true,                -- RhythmWheelServiceClient
+    sync = true,                   -- InstrumentServiceClient
+}
+
+-- The listeners are Profiled(fn) closures, so debug.info on the connection
+-- reports the decorator; the real target is the function it captured.
+local function wrappedFnName(f)
+    if type(f) ~= "function" then return nil end
+    local u = HK.upvals(f)
+    if not u then return nil end
+    local found
+    for _, v in pairs(u) do
+        if type(v) == "function" then
+            local okN, nm = pcall(function() return (debug :: any).info(v, "n") end)
+            if okN and type(nm) == "string" and nm ~= "" and nm ~= "Profiled"
+                and nm ~= "profilebegin" then
+                found = nm
+            end
+        end
+    end
+    return found
+end
+
+-- Run writeFn with the teardown listeners off. Returns how many were
+-- suppressed (0 = none found / unavailable, so callers can still decide to
+-- wait for the results screen the old way).
+local function withContextTeardownSuppressed(char, writeFn)
+    local getconns = requireFn("getconnections")
+    if type(getconns) ~= "function" then
+        writeFn()
+        return 0
+    end
+    local picked = {}
+    for _, attr in ipairs({ "PlayingInstrument", "ItemEquipped" }) do
+        local okC, conns = pcall(function()
+            return getconns(char:GetAttributeChangedSignal(attr))
+        end)
+        if okC and type(conns) == "table" then
+            for _, c in ipairs(conns) do
+                local nm = wrappedFnName(c.Function)
+                if nm and CONTEXT_TEARDOWN[nm] then table.insert(picked, c) end
+            end
+        end
+    end
+    for _, c in ipairs(picked) do pcall(function() c:Disable() end) end
+    local okW, errW = pcall(writeFn)
+    for _, c in ipairs(picked) do pcall(function() c:Enable() end) end
+    if not okW then
+        warn("[GakuranChart] attribute restore errored: " .. tostring(errW))
+    end
+    return #picked
+end
+
 -- A respawned character carries none of our writes, so it is left alone.
 local function restoreAttributes()
     local st = savedAttributes
@@ -847,13 +923,15 @@ local function restoreAttributes()
     savedAttributes = nil
     local char = player.Character
     if not char or char ~= st.char then return end
-    for _, k in ipairs({ "PlayingInstrument", "ItemEquipped" }) do
-        pcall(function()
-            if char:GetAttribute(k) == st.wrote[k] then
-                char:SetAttribute(k, st.saved[k])
-            end
-        end)
-    end
+    withContextTeardownSuppressed(char, function()
+        for _, k in ipairs({ "PlayingInstrument", "ItemEquipped" }) do
+            pcall(function()
+                if char:GetAttribute(k) == st.wrote[k] then
+                    char:SetAttribute(k, st.saved[k])
+                end
+            end)
+        end
+    end)
 end
 
 local function buildGameSong(chart)
@@ -2766,15 +2844,17 @@ do
 end
 
 -- Watch for natural song end to clean up local state.
--- IMPORTANT: do NOT restore attributes while the results screen is still
--- shown — restoring PlayingInstrument to nil triggers the service's
--- stopIfInvalidContext listener, which calls Stop() and destroys the
--- results screen. Wait for _hasRhythmSurface() to go false AND the
--- results screen to be dismissed (or a timeout), then clean up.
+-- Restoring PlayingInstrument used to be unsafe while the results screen was
+-- up (stopIfInvalidContext -> Stop() -> the screen is destroyed mid-fade), so
+-- this waited for the results screen to be dismissed as well - which is what
+-- left the instrument in the character's hands for the whole end screen.
+-- restoreAttributes now writes with those teardown listeners suppressed (see
+-- withContextTeardownSuppressed), so only a LIVE session or view has to be
+-- waited out. _resultsScreen is reported separately for the leak sweeper and
+-- diag, but no longer gates the restore.
 local function surfaceStillUp()
     local ok, up = pcall(function()
         return (service._session ~= nil) or (service._view ~= nil)
-            or (service._resultsScreen ~= nil)
     end)
     return ok and up
 end
