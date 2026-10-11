@@ -15,6 +15,45 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
+### Current task (session 10): quaver SV mismatch on "ball hard" (user report, NOT fixed)
+Goal: the SV map `ball_hard_sv_ballin` does not move like the original game.
+Status: offline investigation only. NO code changes (tree clean), NO fix
+applied, NOTHING live-verified for a fix. Scratch scripts (outside the repo,
+do not re-run blindly): `C:\Users\Administrator\_gk_patch\qua_sv_stats.py`
+(source census), `C:\Users\Administrator\_gk_patch\qua_sv_sim.py`
+(position simulation vs a Quaver-semantics reference).
+- Source: `FunkyChart_v1.23/QUAVER/crafter2011 - ball hard - 260537.qp`,
+  `139214.qua` (`"[SV] ballin'"`, Keys4, 195 BPM single timing point, 1088
+  notes, `BPMDoesNotAffectScrollVelocity: true`, `InitialScrollVelocity: 1`)
+  → workspace `GakuranCharts/Charts/ball_hard_sv_ballin.json` (8,468
+  scrollChanges, rate clamped to [0.05, 20], duration 93.33). Sibling
+  `141345.qua` (Skrubble's Ball, 1556 notes) has 0 SV points — unaffected.
+- Census (stats script): 8,732 raw SV points; multipliers min/max
+  −4,442,921.5 / +4,443,196.0 (spike/teleport SVs); 2,181 negative (25.0%),
+  2,338 with rate >20, 24 with |rate| <0.05; 1,794 distinct values; 170
+  segments with |rate| >1000, each ~0.016 ms long, net displacement 266.17
+  scroll-seconds from those alone (max single 69.42). The converter clamp
+  alters 4,543 points.
+- Simulation (4 approach moments x 1088 notes = 4,352 samples): 38.7% differ
+  from the reference by >0.1 scroll-seconds (~60 px at S~600 px/s), 13.5% by
+  >1.0; median |diff| 0.074, 90th pct 2.293, max 70.0. Same samples under
+  real-Quaver semantics: 0.0% on the WRONG side of the receptor, 3.7% more
+  than 3 scroll-seconds away. So the divergence is ours, not the map's.
+- Concrete converter bug (not fixed): 3 same-time SV pairs (t=41.019 /
+  43.173 / 45.942 s) read "1.0 then 0.024" in file order; Quaver effective =
+  last in file (0.024), but the converter's `sort()` puts 1.0 last
+  (DIFFERENT). Fix direction: stable same-time ordering, last-in-file wins.
+- Open, NO decision recorded: how to preserve negatives/zero/extremes (loader
+  SV model capability was being checked, no conclusion); beat precision
+  (4 decimals) and rate rounding as displacement-error sources; spawn
+  visibility under non-monotonic rates. Do NOT change the clamp until the
+  loader side is verified — clamping is currently load-bearing for stability.
+- Next step: decide the SV preservation policy (negative/zero/extreme), fix
+  the same-time ordering in `tools/qua2gakuran.py` (+ `osu2gakuran.py` if it
+  shares the pattern), re-convert ball_hard to a workspace candidate, and
+  live-verify on client 14512 with `svStatus()` + on-screen eyeball before
+  touching the deployed charts.
+
 ### DONE (session 9): hit flash / hit ring orientation fixed in v2.0.29 (user approved 15:57)
 No current task is open from this session. DEPLOYED v2.0.29, workspace == repo.
 - [x] Read paint helpers + teardown (`paintImage`, `restoreViewVisuals`, cleanup).

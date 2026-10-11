@@ -368,6 +368,26 @@ parent rows and submenu (A2/A3) and is untouched.
   skin with per-lane taps but no pressed/hold art (none on disk), drums/guitar
   instruments, and the receptor-glow/shard art (shards use a separate sprite).
 
+### 12. Quaver SV fidelity ("ball hard" SV map) — INVESTIGATING (session 10)
+- User report: the SV movement does not match the original game. Offline
+  analysis only so far; NO code changes, NO fix live-verified.
+- Source `139214.qua` (`"[SV] ballin'"`, Keys4/195 BPM/1088 notes) carries
+  8,732 raw SV points including spikes to ±4.4M (2181 negative = 25%,
+  2338 with rate >20). Converted chart holds 8,468 scrollChanges with the
+  rate clamped to [0.05, 20] (4,543 points altered). Sibling difficulty has
+  no SV and is unaffected.
+- Simulated positions (4,352 samples) diverge from Quaver semantics on 38.7%
+  of samples by >~60 px (median 0.074, 90th pct 2.293, max 70 scroll-seconds);
+  under real-Quaver semantics 0% are on the wrong side of the receptor.
+- Known converter bug (open): 3 same-time SV pairs where Quaver takes the
+  last-in-file value but the converter's `sort()` reverses the order.
+- Open: negative/zero/extreme-rate preservation policy (loader capability
+  unchecked — do NOT touch the clamp blind, it is load-bearing for
+  stability), beat/rate rounding as error sources. Next: fix same-time
+  ordering, re-convert to a workspace candidate, live-verify via `svStatus()`
+  + eyeball before deploying. Scratch: `_gk_patch/qua_sv_stats.py`,
+  `_gk_patch/qua_sv_sim.py` (outside the repo).
+
 ## Later / future add-ons
 
 ### Multi-difficulty support (requested) -> moved to "Current focus" above
