@@ -79,6 +79,23 @@ do not re-run blindly): `C:\Users\Administrator\_gk_patch\qua_sv_stats.py`
   negatives/zeros in the model; judging never touches SV (time-based), worst
   case of a naive change is visual pop-in + pool pressure, never a crash.
   NOT started — needs its own policy decision + live verification round.
+- [x] POLICY APPROVED by user (session 10, "closest to perfect"): preserve
+  negative/zero/extreme SV end to end. Design (docs-first, NOT implemented):
+  (a) converter drops the clamp (keeps 4dp round + last-in-file collapse;
+  rejects only non-finite values); (b) loader keeps negatives/zeros in the
+  model + collapses same-t to last deterministically; (c) spawn computation
+  branches per chart: positive-only models keep the EXACT v2.0.29 invert path
+  (bit-identical behavior, zero regression risk), models with any rate <= 0
+  use a bounded earliest-visible forward scan (no division by rate anywhere,
+  existing clamp-to-prev/cap/floor machinery keeps sortedness); (d) frame
+  positioning untouched (rate-agnostic already). Pre-implementation check
+  still open: tail-length sign when a hold spans reversed motion (read the
+  tail sizing region fully first). Order: loader → verify old charts →
+  converter → reconvert SV sets → verify. Acceptance: models build, 0
+  errors, live note-Y samples match sim predictions, Ievan 7k_sv regression
+  clean, user eyeball vs Quaver. Rollback: per-file chart backups (charts are
+  regenerable from .qp + committed tools); old clamped charts keep working
+  unchanged under the new loader.
 
 ### DONE (session 9): hit flash / hit ring orientation fixed in v2.0.29 (user approved 15:57)
 No current task is open from this session. DEPLOYED v2.0.29, workspace == repo.

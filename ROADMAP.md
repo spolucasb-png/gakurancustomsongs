@@ -395,7 +395,16 @@ parent rows and submenu (A2/A3) and is untouched.
   rate>0, zero rate would divide by zero. Frame positioning has no such
   limit. Full support = replace inversion with a bounded earliest-visible
   forward scan; judging never touches SV so worst case is visual only.
-  Next: policy decision + dedicated live-verification round. Scratch:
+- [x] APPROVED + DESIGNED (session 10, IN PROGRESS): (a) converter drops the
+  clamp (4dp round + last-in-file collapse stay; only non-finite rejected);
+  (b) loader keeps negatives/zeros, collapses same-t deterministically;
+  (c) spawn branches per chart — positive-only models keep the EXACT v2.0.29
+  invert path (bit-identical), models with any rate <= 0 use the forward
+  scan (no rate division; clamp-to-prev/cap/floor keep sortedness);
+  (d) frame positioning untouched. Pre-check open: tail-length sign over
+  reversed holds. Order: loader → verify old charts → converter → reconvert
+  → verify (model builds, 0 errors, live-Y vs sim, Ievan regression,
+  eyeball). Scratch:
   `_gk_patch/qua_sv_stats.py`, `_gk_patch/qua_sv_sim.py` (outside the repo).
 
 ## Later / future add-ons
