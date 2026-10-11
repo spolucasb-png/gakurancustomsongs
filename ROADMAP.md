@@ -331,6 +331,13 @@ parent rows and submenu (A2/A3) and is untouched.
   skinState — always check the handoff between tables. Verified live:
   rec1/2/4 = Left/Down/Right hashes, lane 3 = base Up, hold heads per-lane,
   0 errors. DEPLOYED v2.0.27, workspace == repo.
+- [x] Etterna tip correction: the bottomcap art is a point-DOWN chevron
+  (misread as point-up from a thumbnail — re-viewed the source to confirm),
+  so the osu convention (flipped on top, as-is at bottom) was right all
+  along; the "swap" was reverted. Lesson: cap orientation is per-skin
+  (quaver end-bulbs want as-is-top, etterna chevrons want flipped-top) —
+  verify against the source art, not memory. Tail redeployed, live sanity
+  clean (0 errors, taps=3, recs=3).
 
 ## Later / future add-ons
 

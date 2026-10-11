@@ -153,12 +153,12 @@ def convert_etterna_skin(skin_dir, out, aspect=1.0, name=None):
     row = bw * 4
     canvas = bytearray(bw * canvas_h * 4)
     if cap_px:
-        # chevron points outward at both ends (as-is on top, flipped copy at
-        # the bottom): the osu! convention points both tips inward here.
-        canvas[0:cap_h * row] = cap_px
+        # bottom-cap art is authored for the bottom end (chevron point down,
+        # attaching to the body at its top edge): flipped copy on top so the
+        # point faces up-outward, as-is at the bottom so it faces down-outward
+        canvas[0:cap_h * row] = o2s.flip_vertical(cap_px, bw, cap_h)
         canvas[cap_h * row:(cap_h + bh) * row] = body_px
-        canvas[(cap_h + bh) * row:(cap_h * 2 + bh) * row] = \
-            o2s.flip_vertical(cap_px, bw, cap_h)
+        canvas[(cap_h + bh) * row:(cap_h * 2 + bh) * row] = cap_px
     else:
         canvas[0:bh * row] = body_px
 

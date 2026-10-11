@@ -88,6 +88,11 @@ Circles skin) and port them into the custom-song script. OSU folder already done
   pack to skinState (recLanes diagnostic proved ss.recImgs empty while
   tapLanes=3) — check handoffs between tables, not just producers.
 - [x] DEPLOYED v2.0.27, workspace == repo, candidate cleaned.
+- [x] Etterna tips (user: still inverted): re-viewed the source art instead
+  of trusting memory — the chevron points DOWN, so the osu convention was
+  correct and my swap was the bug. Reverted, tail redeployed (repo +
+  workspace hash-matched), live sanity 0 errors. Cap orientation is
+  per-skin; note the convention + verification in the converter comment.
 - Repo hygiene lesson (this session): `git add -A` staged 537 untracked
   FunkyChart_v1.23 files into 8bc108d (reset to 14d76c2 with docs only).
   FunkyChart_v1.23/* is now gitignored except FunkyChart.lua. From here on:
