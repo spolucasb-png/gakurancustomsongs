@@ -77,10 +77,13 @@ if type(_G.GakuranChartCleanup) == "function" then
     _G.GakuranChartCleanup = nil
 end
 
--- Fallback for older versions that didn't register a cleanup fn:
--- destroy any previous Rayfield window (Rayfield itself only renames old
--- ones to "Rayfield-Old" and leaves them behind) and our old underframe.
-pcall(function()
+-- HK holds the hook-ownership and UI-rollback helpers (one local instead of
+-- a dozen; see section 1 for the hook side).
+local HK = { cleaned = false, safetyDone = false }
+
+-- Destroy Rayfield windows. Rayfield itself only renames old ones to
+-- "Rayfield-Old" and leaves them behind.
+function HK.sweepRayfield()
     local containers = {}
     if type(gethui) == "function" then
         local okH, h = pcall(gethui)
@@ -96,7 +99,11 @@ pcall(function()
             end
         end
     end
-end)
+end
+
+-- Fallback for older versions that didn't register a cleanup fn:
+-- destroy any previous Rayfield window and our old underframe.
+pcall(HK.sweepRayfield)
 pcall(function()
     local gui = player:FindFirstChildOfClass("PlayerGui")
     if gui then
@@ -139,14 +146,148 @@ local customIds = {}
 -- loader didn't start itself (song wheel / stage / relay).
 local customCharts = {}
 
+-- Hook ownership. The three safety nets wrap game functions and the loader can
+-- be executed many times in one client, so the wrappers are owned by a shared
+-- base in _G that survives re-execution:
+--   * ONE stable wrapper per hook, created once and never wrapped again, so a
+--     new execution cannot stack on a previous GakuranChart wrapper.
+--   * A wrapper holds only the shared guard set and its own base record, never
+--     a loader instance's tables, so nothing from a dead instance is retained.
+--   * The genuine original is recovered by peeling stale GakuranChart wrappers
+--     (left by loader versions that predate this base) off the slot.
+--   * Cleanup restores a slot only while OUR wrapper is what is installed.
+local HOOK_BASE_VERSION = 2
+local hookBase = _G.GakuranChartHookBase
+if type(hookBase) ~= "table" or hookBase.version ~= HOOK_BASE_VERSION then
+    -- Older layout: its saved "originals" may themselves be stale wrappers.
+    hookBase = { version = HOOK_BASE_VERSION }
+    _G.GakuranChartHookBase = hookBase
+end
+if type(hookBase.ids) ~= "table" then hookBase.ids = {} end
+local guardIds = hookBase.ids   -- song ids that must never reach the originals
+
+function HK.upvals(f)
+    local ok, u = pcall(function() return (getupvalues or (debug :: any).getupvalues)(f) end)
+    if ok and type(u) == "table" then return u end
+    return nil
+end
+
+function HK.source(f)
+    local ok, s = pcall(function() return (debug :: any).info(f, "s") end)
+    return ok and tostring(s) or ""
+end
+
+-- Executor-compiled code (as opposed to a game ModuleScript function)? Game
+-- functions run in an environment whose `script` is their ModuleScript;
+-- executor chunks have none. The "[string" chunk name is a second signal.
+function HK.isExecutorChunk(f)
+    if HK.source(f):find("^%[string") then return true end
+    local okE, env = pcall(getfenv, f)
+    if okE and type(env) == "table" then
+        local okS, sc = pcall(function() return env.script end)
+        return okS and typeof(sc) ~= "Instance"
+    end
+    return false
+end
+
+-- Is f a wrapper left in a slot by an older GakuranChart execution? Those are
+-- executor-compiled chunks with exactly two upvalues: a pure {string = true}
+-- guard set and the function they wrap. Returns the wrapped function, or nil.
+-- Our own stable wrappers never match (their second upvalue is a table), and
+-- foreign wrappers do not have this shape, so they are never peeled.
+function HK.legacyInner(f)
+    if type(f) ~= "function" then return nil end
+    if not HK.isExecutorChunk(f) then return nil end
+    local u = HK.upvals(f)
+    if not u then return nil end
+    local guardTbl, inner, n = nil, nil, 0
+    for _, v in pairs(u) do
+        n += 1
+        if type(v) == "table" then
+            guardTbl = v
+        elseif type(v) == "function" then
+            inner = v
+        end
+    end
+    if n ~= 2 or guardTbl == nil or inner == nil then return nil end
+    for k, v in pairs(guardTbl) do
+        if type(k) ~= "string" or v ~= true then return nil end
+    end
+    return inner
+end
+
+function HK.unwrapLegacy(f)
+    for _ = 1, 32 do
+        local inner = HK.legacyInner(f)
+        if not inner then break end
+        f = inner
+    end
+    return f
+end
+
+-- Is `target` reachable from `top` through function upvalues (i.e. does top
+-- wrap target)? Bounded: depth 6, 200 visited functions.
+function HK.chainContains(top, target, depth, seen)
+    depth = depth or 0
+    seen = seen or { n = 0 }
+    if type(top) ~= "function" or seen[top] or depth > 6 or seen.n > 200 then return false end
+    if top == target then return true end
+    seen[top] = true
+    seen.n += 1
+    local u = HK.upvals(top)
+    if not u then return false end
+    for _, v in pairs(u) do
+        if type(v) == "function" and HK.chainContains(v, target, depth + 1, seen) then
+            return true
+        end
+    end
+    return false
+end
+
+-- Install (or re-use) our stable wrapper for mod[key].
+function HK.ensure(name, mod, key, makeWrap)
+    local b = hookBase[name]
+    if type(b) ~= "table" or b.mod ~= mod or b.key ~= key
+        or type(b.orig) ~= "function" or type(b.wrap) ~= "function" then
+        local orig = HK.unwrapLegacy(mod[key])
+        b = { mod = mod, key = key, orig = orig, under = orig }
+        b.wrap = makeWrap(b)
+        hookBase[name] = b
+    end
+    local cur = mod[key]
+    if cur == b.wrap or HK.chainContains(cur, b.wrap) then
+        return b   -- already installed, directly or beneath another component's wrapper
+    end
+    b.under = HK.unwrapLegacy(cur)
+    mod[key] = b.wrap
+    return b
+end
+
+function HK.makeSubmit(b)
+    return function(songId, ...)
+        if guardIds[songId] then return end
+        return b.under(songId, ...)
+    end
+end
+
+function HK.makeQuery(b)
+    return function(songId, ...)
+        if guardIds[songId] then return false, nil end
+        return b.under(songId, ...)
+    end
+end
+
+function HK.makeFire(b)
+    return function(payload, ...)
+        if type(payload) == "table" and guardIds[payload.SongId] then return end
+        return b.under(payload, ...)
+    end
+end
+
 -- Safety net 1: never submit scores for custom songs
 local statsMod = gcFind(function(t) return type(rawget(t, "SubmitStats")) == "function" end)
 if statsMod then
-    local origSubmit = statsMod.SubmitStats
-    statsMod.SubmitStats = function(songId, ...)
-        if customIds[songId] then return end
-        return origSubmit(songId, ...)
-    end
+    HK.ensure("SubmitStats", statsMod, "SubmitStats", HK.makeSubmit)
 end
 
 -- Safety net 2: never query jam sync / fire amp relay for custom songs
@@ -154,16 +295,8 @@ local relayMod = gcFind(function(t)
     return type(rawget(t, "QueryJamSync")) == "function" and type(rawget(t, "FireStart")) == "function"
 end)
 if relayMod then
-    local origQuery = relayMod.QueryJamSync
-    relayMod.QueryJamSync = function(songId, ...)
-        if customIds[songId] then return false, nil end
-        return origQuery(songId, ...)
-    end
-    local origFireStart = relayMod.FireStart
-    relayMod.FireStart = function(payload, ...)
-        if type(payload) == "table" and customIds[payload.SongId] then return end
-        return origFireStart(payload, ...)
-    end
+    HK.ensure("QueryJamSync", relayMod, "QueryJamSync", HK.makeQuery)
+    HK.ensure("FireStart", relayMod, "FireStart", HK.makeFire)
 end
 
 ----------------------------------------------------------------
@@ -389,15 +522,108 @@ local function buildGameSong(chart)
     return song
 end
 
-local function injectSong(song)
-    customIds[song.id] = true
-    service._registry._byId[song.id] = song
-    if settings.showInWheel then
-        for _, s in ipairs(service._registry._list) do
-            if s.id == song.id then return end
-        end
-        table.insert(service._registry._list, song)
+-- Registry ownership ledger. injectSong used to overwrite _byId[id] blindly
+-- and cleanup could not tell our entries from the game's. Every song we put
+-- in the registry is now recorded (shared through _G, so a later loader
+-- execution can still undo what an earlier one did) together with the real
+-- game entry it shadowed, if any. Ownership is by object identity.
+local LG = {}
+LG.ledger = _G.GakuranChartLedger
+if type(LG.ledger) ~= "table" or LG.ledger.version ~= 1 then
+    LG.ledger = { version = 1, recs = {}, owned = setmetatable({}, { __mode = "k" }) }
+    _G.GakuranChartLedger = LG.ledger
+end
+
+-- _byId / _list of the live registry (nil if unavailable). Records describing
+-- a different registry object are dropped.
+function LG.tables()
+    local reg = service._registry
+    if type(reg) ~= "table" or type(reg._byId) ~= "table" or type(reg._list) ~= "table" then
+        return nil
     end
+    local L = LG.ledger
+    if L.reg ~= reg then
+        L.reg = reg
+        L.recs = {}
+        L.owned = setmetatable({}, { __mode = "k" })
+    end
+    return reg._byId, reg._list
+end
+
+-- Is this registry entry ours? Normally by identity (the ledger). The second
+-- branch only recognises leftovers of loader runs that predate the ledger: it
+-- applies only to ids we manage and only when EVERY sound is a local executor
+-- asset (rbxasset://...). Shipped game songs use rbxassetid://, so a real
+-- game entry is never claimed here. Having soundIds / a charter / a long
+-- snake_case id proves nothing and is not used.
+function LG.isOurs(s)
+    if type(s) ~= "table" then return false end
+    if LG.ledger.owned[s] then return true end
+    if not customIds[s.id] or type(s.soundIds) ~= "table" then return false end
+    local any = false
+    for _, v in pairs(s.soundIds) do
+        if type(v) ~= "string" or not v:find("^rbxasset://") then return false end
+        any = true
+    end
+    return any
+end
+
+local function injectSong(song)
+    local byId, list = LG.tables()
+    if not byId then error("song registry unavailable") end
+    local L = LG.ledger
+    local id = song.id
+    customIds[id] = true
+    guardIds[id] = true   -- guard first, then publish the song
+
+    -- What real game entry (if any) are we shadowing? Never one of ours.
+    local rec = L.recs[id]
+    local displaced, displacedIdx
+    if rec then displaced, displacedIdx = rec.displaced, rec.displacedIdx end
+    if displaced == nil then
+        local cur = byId[id]
+        if cur ~= nil and cur ~= song and not LG.isOurs(cur) then displaced = cur end
+        for i, s in ipairs(list) do
+            if type(s) == "table" and s.id == id and s ~= song and not LG.isOurs(s) then
+                if displaced == nil then displaced = s end
+                if s == displaced then displacedIdx = i end
+                break
+            end
+        end
+    end
+
+    byId[id] = song
+    local listed = false
+    if settings.showInWheel then
+        local genuine = false
+        for _, s in ipairs(list) do
+            if type(s) == "table" and s.id == id and s ~= song and not LG.isOurs(s) then
+                genuine = true
+                break
+            end
+        end
+        -- Replace our own earlier/stale entry in place; never duplicate an id
+        -- and never touch a real game entry (it stays in the wheel).
+        for i = #list, 1, -1 do
+            local s = list[i]
+            if type(s) == "table" and s.id == id and (s == song or LG.isOurs(s)) then
+                if genuine or listed then
+                    table.remove(list, i)
+                else
+                    list[i] = song
+                    listed = true
+                end
+            end
+        end
+        if not listed and not genuine then
+            table.insert(list, song)
+            listed = true
+        end
+    end
+
+    if rec and rec.song ~= song then L.owned[rec.song] = nil end
+    L.owned[song] = true
+    L.recs[id] = { song = song, displaced = displaced, displacedIdx = displacedIdx, listed = listed }
 end
 
 -- The game's song wheel rebuilds its list on every open from
@@ -423,15 +649,17 @@ local function injectAllCharts()
     return count
 end
 
+-- Take OUR songs out of the wheel: exact objects we own (plus pre-ledger
+-- leftovers, see LG.isOurs). A game entry that merely shares an id stays.
 local function removeFromWheel()
-    local list = service._registry and service._registry._list
+    local _, list = LG.tables()
     if type(list) ~= "table" then return end
     for i = #list, 1, -1 do
-        local entry = list[i]
-        if type(entry) == "table" and customIds[entry.id] then
+        if LG.isOurs(list[i]) then
             table.remove(list, i)
         end
     end
+    for _, rec in pairs(LG.ledger.recs) do rec.listed = false end
 end
 
 ----------------------------------------------------------------
@@ -1344,6 +1572,153 @@ local function unbindSv()
     svRenderBound = false
 end
 
+----------------------------------------------------------------
+-- 5.9 Re-execution cleanup.
+-- Registered HERE, before the UI is built (the persistent RenderStepped
+-- connection above is already live), so a UI failure can never leave a
+-- running loader that the next execution cannot clean up.
+----------------------------------------------------------------
+local Rayfield = nil   -- assigned by buildUI() in section 6
+
+local function isOurSessionPlaying()
+    local ok, yes = pcall(function()
+        local sess = service._session
+        if not sess then return false end
+        local p = nil
+        if type(sess.GetPlayable) == "function" then
+            local okG, got = pcall(sess.GetPlayable, sess)
+            if okG then p = got end
+        end
+        if type(p) ~= "table" then p = sess._playable end
+        if type(p) ~= "table" then return false end
+        local id = p.id or p.songId
+        return id ~= nil and customIds[id] == true
+    end)
+    return ok and yes == true
+end
+
+-- Undo what injectSong did, by ownership:
+--   * our songs leave the wheel (exact objects only);
+--   * where _byId still holds OUR song, the real game entry we shadowed is put
+--     back (or the key is removed when there was none); a slot someone else
+--     has since taken over is left alone;
+--   * a real entry that was in the wheel and is now missing is re-inserted
+--     once (never creating a duplicate id);
+--   * stale custom entries from older loader runs under ids we manage are
+--     dropped, and replaced by the genuine entry from _list when one exists.
+-- customIds is deliberately NOT cleared (the guard set in hookBase.ids is what
+-- keeps blocking while a wrapper is installed; it is cleared by HK.restore).
+local function removeInjectedSongs()
+    local byId, list = LG.tables()
+    if not byId then return end
+    local L = LG.ledger
+    pcall(removeFromWheel)
+    for id, rec in pairs(L.recs) do
+        if byId[id] == rec.song then
+            byId[id] = rec.displaced
+        end
+        local d = rec.displaced
+        if d ~= nil and rec.displacedIdx ~= nil then
+            local present, dup = false, false
+            for _, s in ipairs(list) do
+                if s == d then
+                    present = true
+                elseif type(s) == "table" and s.id == id then
+                    dup = true
+                end
+            end
+            if not present and not dup then
+                table.insert(list, math.min(rec.displacedIdx, #list + 1), d)
+            end
+        end
+        L.owned[rec.song] = nil
+        L.recs[id] = nil
+    end
+    for id in pairs(customIds) do
+        local cur = byId[id]
+        if cur ~= nil and LG.isOurs(cur) then
+            local genuine = nil
+            for _, s in ipairs(list) do
+                if type(s) == "table" and s.id == id and not LG.isOurs(s) then
+                    genuine = s
+                    break
+                end
+            end
+            byId[id] = genuine
+        end
+    end
+end
+
+-- Put the game's original SubmitStats / QueryJamSync / FireStart back, but only
+-- where our wrapper is still the installed function (never clobber a wrapper
+-- someone else put on top of ours). If another component wraps ours, we stay
+-- in its chain and the guard set is kept. Returns true once no wrapper of ours
+-- remains installed (then the guard set is cleared, so nothing stale lingers).
+function HK.restore()
+    local base = _G.GakuranChartHookBase
+    if type(base) ~= "table" or base.version ~= HOOK_BASE_VERSION then return true end
+    local allGone = true
+    for _, name in ipairs({ "SubmitStats", "QueryJamSync", "FireStart" }) do
+        local b = base[name]
+        if type(b) == "table" and type(b.mod) == "table" and type(b.wrap) == "function" then
+            local cur = b.mod[b.key]
+            if cur == b.wrap then
+                if not pcall(function() b.mod[b.key] = b.under end) then allGone = false end
+            elseif HK.chainContains(cur, b.wrap) then
+                allGone = false
+            end
+        end
+    end
+    if allGone and type(base.ids) == "table" then
+        for k in pairs(base.ids) do base.ids[k] = nil end
+    end
+    return allGone
+end
+
+-- Registry + hook rollback, only while no custom session of ours is live.
+-- Stop() tears down a frame later, so right after our own Stop this can still
+-- be true; then the songs and the wrappers simply stay (guards intact) and a
+-- later call, or the next loader execution, finishes the job. Restoring the
+-- originals is only safe once our songs are out of the registry/wheel,
+-- otherwise a leftover custom song could submit a score with the guard gone.
+-- Returns true when done.
+function HK.finish()
+    if HK.safetyDone then return true end
+    if isOurSessionPlaying() then return false end
+    pcall(removeInjectedSongs)
+    pcall(HK.restore)
+    HK.safetyDone = true
+    return true
+end
+
+-- Idempotent: the first call does the teardown, later calls only retry the
+-- safety nets if they were deferred.
+_G.GakuranChartCleanup = function()
+    if not HK.cleaned then
+        HK.cleaned = true
+        local playing = false
+        pcall(function() playing = service:IsPlaying() end)
+        if playing and isOurSessionPlaying() then
+            pcall(function() service:Stop({ fadeOut = false }) end)
+            pcall(function() service._carryOverStats = nil end)
+            playing = false
+        end
+        -- Always restore the skin baseline (even if a play is active): the
+        -- wrap + shape write are client-side only and the next loader instance
+        -- re-applies its own selection right after this cleanup runs.
+        pcall(deactivateSkin)
+        pcall(unbindSv)   -- also disconnects the persistent RenderStepped connection
+        if not playing then
+            pcall(restoreAttributes)
+            pcall(destroyUnderframe)
+        end
+        pcall(function()
+            if Rayfield and type(Rayfield.Destroy) == "function" then Rayfield:Destroy() end
+        end)
+    end
+    HK.finish()
+end
+
 local function playChart()
     if not currentChart then
         notify("No chart", "Select and load a chart first", true)
@@ -1514,7 +1889,12 @@ end)
 ----------------------------------------------------------------
 -- 6. UI (Rayfield)
 ----------------------------------------------------------------
-local Rayfield = loadstring(fn.readfile("ui/Rayfield.lua"))()
+-- The whole UI is built inside buildUI() and run under pcall (see the end of
+-- this section): a Rayfield load/build error must not abort the loader and
+-- leave it half-initialised. The body below is intentionally NOT re-indented
+-- so the diff against the previous version stays reviewable.
+local function buildUI()
+Rayfield = loadstring(fn.readfile("ui/Rayfield.lua"))()
 
 local Window = Rayfield:CreateWindow({
     Name = "GakuranChart v" .. VERSION,
@@ -1756,49 +2136,38 @@ TabOpt:CreateSection("Info")
 TabOpt:CreateLabel("Workspace folder: " .. FOLDER)
 TabOpt:CreateLabel("Drop .json charts in Charts/, audio in Audio/")
 TabOpt:CreateLabel("Convert osu! maps with tools/osu2gakuran.py")
+end -- buildUI
 
-----------------------------------------------------------------
--- 7. Re-execution cleanup + programmatic API
-----------------------------------------------------------------
-local function isOurSessionPlaying()
-    local ok, yes = pcall(function()
-        local sess = service._session
-        if not sess then return false end
-        local p = nil
-        if type(sess.GetPlayable) == "function" then
-            local okG, got = pcall(sess.GetPlayable, sess)
-            if okG then p = got end
-        end
-        if type(p) ~= "table" then p = sess._playable end
-        if type(p) ~= "table" then return false end
-        local id = p.id or p.songId
-        return id ~= nil and customIds[id] == true
-    end)
-    return ok and yes == true
+local uiOk, uiErr = xpcall(buildUI, function(e)
+    return tostring(e) .. "\n" .. debug.traceback()
+end)
+if not uiOk then
+    warn("[GakuranChart] UI initialization failed - rolling the loader back:\n" .. tostring(uiErr))
+    -- Retire this instance (its background loops watch _G.GakuranChartGen),
+    -- then undo everything with the cleanup registered before the UI.
+    if _G.GakuranChartGen == MYGEN then _G.GakuranChartGen = MYGEN + 1 end
+    local retireGen = _G.GakuranChartGen
+    pcall(_G.GakuranChartCleanup)
+    pcall(HK.sweepRayfield)   -- a half-built window may exist
+    if not HK.safetyDone then
+        -- A custom session was still tearing down: keep the guards until it
+        -- is gone, then finish. Stops as soon as a newer execution takes over
+        -- (it owns the shared state from then on).
+        task.spawn(function()
+            for _ = 1, 80 do
+                task.wait(0.25)
+                if _G.GakuranChartGen ~= retireGen then return end
+                if HK.finish() then return end
+            end
+        end)
+    end
+    return
 end
 
-_G.GakuranChartCleanup = function()
-    local playing = false
-    pcall(function() playing = service:IsPlaying() end)
-    if playing and isOurSessionPlaying() then
-        pcall(function() service:Stop({ fadeOut = false }) end)
-        pcall(function() service._carryOverStats = nil end)
-        playing = false
-    end
-    -- Always restore the skin baseline (even if a play is active): the
-    -- wrap + shape write are client-side only and the next loader instance
-    -- re-applies its own selection right after this cleanup runs.
-    pcall(deactivateSkin)
-    pcall(unbindSv)
-    if not playing then
-        pcall(restoreAttributes)
-        pcall(destroyUnderframe)
-    end
-    pcall(function()
-        if Rayfield and type(Rayfield.Destroy) == "function" then Rayfield:Destroy() end
-    end)
-end
-
+----------------------------------------------------------------
+-- 7. Programmatic API
+-- (the re-execution cleanup now lives in 5.9, registered before the UI)
+----------------------------------------------------------------
 _G.GakuranChart = {
     version = VERSION,
     list = listChartFiles,
