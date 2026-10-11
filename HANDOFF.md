@@ -26,9 +26,25 @@ osu! maps that have more than 4 columns as native 4K+ charts instead of 4-lane f
       to 7; `--max-lanes 4` = the old fold-everything-to-4K behaviour; `--no-fold` still skips.
       Verified offline: `tools/test_fold.py` 10/10 (the 10K end-to-end test was rewritten for the
       new default and a native 5K-7K test added), `tools/check.py` 7/7.
-- [ ] Find the source maps above 4K (previously imported folded: `set304864_5k_*`, `ievan_polkka_7k_*`),
-      re-convert them with the new default, put them in the workspace, check they load.
-- [ ] Play one in the live client; nothing about 5-7 lane judging or the on-screen look is proven yet.
+- [x] Source maps: the >4K `.osz` files in `FunkyChart_v1.23/` (Dragon Blade 6K, Blue Zenith 7K x10,
+      `304864 daisan -+` 5K x4, Ievan Polkka 7K x2). The previous session re-converted them (11:23) with
+      the new default into the workspace `GakuranCharts` (whole-folder backup made first:
+      `Referencesandmods\_scratch_convert\workspace_gakurancharts_backup_before_4kplus`). 17 native charts
+      (`lanes` 5/6/7, no `fold`). Charts are NOT in git: only the workspace holds them.
+- [x] Verified this session: offline check of all 17 (every lane 1..N used, sorted by beat, noteCount
+      matches, audio/background files exist) = 0 problems; live loader 2.0.20 `G.load` accepts 17/17
+      (`diag`: all getgc targets found); short live play of `ievan_polkka_7k_sv` (7 lanes, SV 107 points):
+      `_lanes=7`, view 7 receptors, lane pitch ~134 px, notes live on lanes 2,3,5,7, `svStatus.errors=0`,
+      `visStatus` errors 0 (`holdHead`, `pressed`, `tapLanes=2` active, 84 writes), console clean,
+      `PlayingInstrument` nil again after `G.stop()`, no session/view left.
+- [ ] STILL NOT verified: how it looks on screen, hit judging with physical keys on lanes 5-7 (the
+      lane 7 hit-bot result is still open), perspective mode, clicking the Keys (4K+) tab.
+- [ ] QUESTION FOR THE USER (unanswered): the osu! Songs folder (`%LOCALAPPDATA%\osu!\Songs`) holds
+      251 mania difficulties with more than 4 keys in about 70 sets (mostly 7K, also 5K/6K and 8K-10K).
+      NOT imported. Importing all would add ~70 songs and audio files to the wheel, so ask which sets
+      (or all) before converting; 8K+ would fold to 7 lanes.
+- [ ] Cleanup pending: `__test_7k.json` in the workspace Charts (shows in the wheel) and the
+      `GakuranChart_*_candidate.lua` files in the workspace (`python tools/deploy.py --clean`).
 
 ### Current task (older, still partly open): deploy v2.0.18 live, then real 4K+ (more than 4 lanes) with a key-binding page
 Goal (user, 2026-10-11): make maps with more than 4 keys playable as such instead of
