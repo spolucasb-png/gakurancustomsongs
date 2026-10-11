@@ -29,6 +29,18 @@ image icons. User accepts the wheel-skin-injection update-fragility risk.
   buildGameSong source+tag, SWAP_FIELDS, submenu/overlay/Rayfield tags, icon
   asset map with graceful missing-file fallback) → check.py → candidate →
   live-verify (30/30 load, tags on screen, no Scores.json regrowth) → deploy.
+- [x] DONE + DEPLOYED as v2.0.22 (`FA8C9CDA…`, workspace == repo). Live on
+  client 14512: 30/30 charts read (29 osu + 1 local); 9 wheel rows tagged
+  ([osu!] x8, [local] x1); submenu Data.sub `[osu!] 504 notes | 3:11`, chips
+  intact; main-row TRUE icons 8/8 on first open after fresh exec, 0 stacked
+  across re-renders (defer+repaint; synchronous paint caught 0 — same async-
+  apply class as the submenu render wait); diag clean, 0 bad hooks, SV
+  errors 0, no Scores.json; wheelRev 1→3 across the work. PNGs
+  (tools/make_source_icons.py, pure stdlib) in repo + workspace
+  Assets/icons/. NOT live-verified: overlay fallback branch (hard to force;
+  syntax-checked only), Rayfield labels (init-clean only — eyeball pending),
+  on-screen look (user), 9th row on page 2, touch/gamepad.
+- Star-badge DiffTier-nil probe (session 6) still queued alongside.
 - Star-badge DiffTier-nil probe (session 6) still queued alongside.
 
 ### Session 5 (2026-10-11): stage keyboard guard (v2.0.21), chart import answer

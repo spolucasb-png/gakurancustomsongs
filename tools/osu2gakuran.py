@@ -372,7 +372,7 @@ def place_media(src: Path, dst_dir: Path, base: str) -> Path:
 def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path,
                  copy_audio=True, mode_override=None,
                  include_nonmania=False, allow_lossy_keys=False, fold_keys=True,
-                 max_lanes=MAX_KEYBOARD_LANES):
+                 max_lanes=MAX_KEYBOARD_LANES, source="osu"):
     text = osu_path.read_text(encoding="utf-8", errors="replace")
     sections = parse_osu(text)
 
@@ -483,6 +483,9 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
         "rank": 1,   # 1 = easiest in its song; finalised by assign_ranks()
         "sourceMode": MODE_NAMES.get(mode, str(mode)),
         "sourceKeys": keys if mode == 3 else None,
+        # origin engine of the chart (additive; the loader shows a game tag /
+        # icon from it and falls back to "unknown" when absent)
+        "source": source or "osu",
     }
     if mode != 3:
         chart["approximate"] = True
@@ -569,11 +572,13 @@ def main():
                     help="lanes a Keyboard chart may use (default %d: 5K-7K maps convert 1:1, "
                          "8K+ fold to this many lanes; 4 = the old fold-everything-to-4K behaviour)"
                          % MAX_KEYBOARD_LANES)
+    ap.add_argument("--source", default="osu",
+                    help="origin engine tag written into each chart (default osu)")
     args = ap.parse_args()
 
     kw = dict(mode_override=args.mode, include_nonmania=args.include_nonmania,
               allow_lossy_keys=args.allow_lossy_keys, fold_keys=not args.no_fold,
-              max_lanes=args.max_lanes)
+              max_lanes=args.max_lanes, source=args.source or "osu")
     inp = args.input
     results = []
     if inp.suffix.lower() == ".osz":

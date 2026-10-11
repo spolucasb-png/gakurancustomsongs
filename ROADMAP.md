@@ -273,6 +273,9 @@ parent rows and submenu (A2/A3) and is untouched.
   `ImageLabel`, guard everything with pcall. Queued as a live step.
 - Live gate before deploy: 30/30 load, tags visible on screen, hooks still
   ours, no `Scores.json` regrowth, re-exec zero growth.
+- [x] DONE + DEPLOYED v2.0.22 (live-verified on client 14512, see HANDOFF
+  session 7; wheelRev 3). Not yet eyeballed on screen by the user; overlay
+  branch + Rayfield labels still only init-clean.
 
 ## Later / future add-ons
 

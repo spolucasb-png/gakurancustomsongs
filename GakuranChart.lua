@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.21
+    GakuranChart v2.0.22
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.21"
+local VERSION = "2.0.22"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -703,6 +703,11 @@ local function findWheelController(force)
     return wheelCtl
 end
 
+-- Forward declaration: the list-page wrapper below calls it, but the body
+-- lives further down (it needs sourceIconAsset). Assigned before any render
+-- can run; the wheelRev bump rebuilds live records onto the new body anyway.
+local paintWheelSourceIcons
+
 -- List-page wrapper: pending valid + per-run renderer present -> our submenu
 -- page; otherwise clear any stale flag and run the game's list renderer. (An
 -- earlier revision wrapped the whole router and skipped its prologue and
@@ -729,13 +734,25 @@ function HK.makeWheelListMenu(b)
             end
         end
         b.pendingSongId = nil
-        return b.under(self, ...)
+        local res = table.pack(b.under(self, ...))
+        -- base list just rendered: paint our rows' source icons on a defer.
+        -- the first Open proved the apply finishes during the transition
+        -- tween (slots/V may not exist yet when under returns: 0 icons on a
+        -- synchronous paint, 8/8 one open later), so paint after the call
+        -- returns and once more shortly after. pcall-guarded no-op on
+        -- unfamiliar skins; never touches the return values.
+        task.defer(function()
+            paintWheelSourceIcons(self)
+            task.wait(0.5)
+            paintWheelSourceIcons(self)
+        end)
+        return table.unpack(res, 1, res.n)
     end
 end
 -- Wrapper-body revision for the WheelMenu hook: bump whenever
 -- HK.makeWheelListMenu changes, or a client that already holds a record keeps
 -- running the OLD body (rev 1 = first body that counts renders).
-HK.wheelRev = 1
+HK.wheelRev = 3
 do
     local c = findWheelController()
     -- getgc(true) enumeration is non-deterministic: five identical scans in a
@@ -914,6 +931,73 @@ end
 local currentChart = nil   -- decoded json
 local currentChartPath = nil
 
+-- Source game tags (session 7): which engine a chart comes from (osu, local,
+-- future converters). The game wheel has no icon slot, so the origin travels
+-- as a short title prefix on wheel rows; our own UI adds true ImageLabels
+-- where it owns the GUI (overlay) and text tags elsewhere. Placed here (ahead
+-- of readChart/buildGameSong) so both can close over these locals.
+local SOURCE_TAGS = { osu = "[osu!]", ["local"] = "[local]" }
+local function chartSource(chart)
+    local s = type(chart) == "table" and type(chart.source) == "string" and chart.source or ""
+    s = s:lower():gsub("[^%w]", "")
+    return s ~= "" and s or "unknown"
+end
+local function sourceTag(chart)
+    return SOURCE_TAGS[chartSource(chart)] or "[custom]"
+end
+-- Icon asset for a source id, or nil when the PNG is not installed yet.
+-- Graceful by design: callers fall back to the text tag, so missing files
+-- never break a row. Expected path: GakuranCharts/Assets/icons/<source>.png
+local function sourceIconAsset(src)
+    local ok, asset = pcall(function()
+        local path = FOLDER .. "/Assets/icons/" .. src .. ".png"
+        if fn.isfile(path) then return fn.getlocalasset(path) end
+        return nil
+    end)
+    if ok then return asset end
+    return nil
+end
+
+-- Wheel-row source icons (session 7): after the game's list renderer builds
+-- the rows, tag OUR rows (title prefix) with a small icon left of the Diff
+-- badge. Everything is runtime-derived (Diff anchor/position) and pcall-
+-- guarded: an unfamiliar skin simply gets no icon. Rows are rebuilt on every
+-- open, so icons never outlive their row; the name check keeps one render
+-- pass from stacking. Runs on the base-render path only (our submenu slots
+-- carry untagged difficulty names, so they never match anyway).
+paintWheelSourceIcons = function(self)
+    local okS, slots = pcall(function() return self._slots end)
+    if not (okS and type(slots) == "table") then return end
+    for _, s in ipairs(slots) do
+        pcall(function()
+            if type(s) ~= "table" then return end
+            local lab = tostring(s.Label or "")
+            local src = lab:match("^%[osu!%]") and "osu"
+                or lab:match("^%[local%]") and "local"
+                or lab:match("^%[custom%]") and "unknown" or nil
+            if not src then return end
+            local V = s.V
+            if type(V) ~= "table" then return end
+            local root, diff = V.Root, V.Diff
+            if typeof(root) ~= "Instance" or typeof(diff) ~= "Instance" then return end
+            if root:FindFirstChild("GakuranSrcIcon") then return end
+            -- right-anchored badge only; any other layout is left alone
+            local dp = diff.Position
+            if dp.X.Scale ~= 1 then return end
+            local img = Instance.new("ImageLabel")
+            img.Name = "GakuranSrcIcon"
+            img.AnchorPoint = Vector2.new(1, 0.5)
+            img.Position = UDim2.new(1, dp.X.Offset - 4, 0.5, 0)
+            img.Size = UDim2.fromOffset(16, 16)
+            img.BackgroundTransparency = 1
+            img.BorderSizePixel = 0
+            local iconAsset = sourceIconAsset(src)
+            if type(iconAsset) == "string" then img.Image = iconAsset end
+            img.Parent = root
+        end)
+    end
+end
+
 local function readChart(path)
     if not fn.isfile(path) then
         return nil, "File not found: " .. tostring(path)
@@ -973,6 +1057,11 @@ local function readChart(path)
     end)
     data.charts[data.mode] = cleaned
     data._droppedNotes = dropped
+    -- origin engine tag (additive; the converter writes it, hand-made charts
+    -- may lack it). Normalised once here so every consumer sees one shape.
+    if type(data.source) ~= "string" or data.source == "" then
+        data.source = "unknown"
+    end
     return data
 end
 
@@ -1192,9 +1281,14 @@ local function buildGameSong(chart)
 
     local song = {
         id = chart.id,
-        title = chart.title or chart.id,
+        -- source tag travels in the title: the game wheel renders rows itself
+        -- and offers no icon slot, so a prefix is the only lever on its rows.
+        -- Rayfield/submenu read the chart tables directly and tag at their own
+        -- display sites, so they are unaffected by this prefix.
+        title = sourceTag(chart) .. " " .. (chart.title or chart.id),
         artist = chart.artist or "",
         charter = chart.charter or "",
+        gakuranSource = chartSource(chart),
         bpm = chart.bpm,
         animationbpm = chart.animationbpm or chart.bpm,
         animationBpmChanges = chart.animationBpmChanges,
@@ -2735,7 +2829,7 @@ end
 local SWAP_FIELDS = {
     "title", "artist", "charter", "bpm", "animationbpm", "animationBpmChanges",
     "startAt", "offsetMs", "approach", "charts", "soundIds", "difficulty", "coverId",
-    "gakuranLanes",
+    "gakuranLanes", "gakuranSource",
 }
 
 local function pickDifficultyInner(parent, d, state)
@@ -2924,7 +3018,23 @@ local function openPicker(parent)
         bar.Parent = btn
         round(bar, 3)
         text(btn, string.upper(diffName(chart)), 18, Enum.Font.GothamBold, Color3.new(1, 1, 1),
-            UDim2.fromOffset(18, 6), UDim2.fromOffset(rowW - 28, 24))
+            UDim2.fromOffset(18, 6), UDim2.fromOffset(rowW - 80, 24))
+        -- true source icon when its PNG is installed, else the text tag keeps
+        -- the row labelled; either way the row never renders unidentified
+        local srcIcon = sourceIconAsset(chartSource(chart))
+        if type(srcIcon) == "string" then
+            local img = Instance.new("ImageLabel")
+            img.Name = "SrcIcon"
+            img.Size = UDim2.fromOffset(18, 18)
+            img.Position = UDim2.fromOffset(rowW - 26, 6)
+            img.BackgroundTransparency = 1
+            img.BorderSizePixel = 0
+            img.Image = srcIcon
+            img.Parent = btn
+        else
+            text(btn, sourceTag(chart), 13, Enum.Font.GothamBold, Color3.fromRGB(140, 180, 255),
+                UDim2.fromOffset(rowW - 70, 6), UDim2.fromOffset(62, 18))
+        end
         text(btn, ("%d notes  |  %s  |  %.1f notes/s"):format(
                 #chart.charts[chart.mode], fmtDuration(chart.duration), d.density),
             13, Enum.Font.Gotham, Color3.fromRGB(160, 166, 190),
@@ -3025,10 +3135,12 @@ function HK.renderWheelSubmenu(controller, pid)
         -- (the native slot label end-truncates, so only the name can clip).
         local stars = ("★%.2f"):format(starRating(chart))
         local title = name
-        local sub = ("%d notes  |  %s"):format(#chart.charts[chart.mode], fmtDuration(chart.duration))
+        local sub = ("%s  %d notes  |  %s"):format(sourceTag(chart),
+            #chart.charts[chart.mode], fmtDuration(chart.duration))
         local song = parent.song
         local art = { artist = song.artist, coverId = song.coverId, diff = stars,
-            length = fmtDuration(chart.duration), playMode = parent.mode }
+            length = fmtDuration(chart.duration), playMode = parent.mode,
+            source = chartSource(chart) }
         controller:_setSlot(1 + i, title, function()
             local okB, resB = pcall(pickDifficulty, parent, dd)
             if not okB then
@@ -3409,10 +3521,10 @@ local function buildSongList()
         local diffs = groups[key]
         sortDiffs(diffs)                     -- easiest first, same rule as the wheel
         for _, d in ipairs(diffs) do
-            d.label = ("%s  (%s%.2f)"):format(d.name, utf8.char(0x2605), starRating(d.chart))
+            d.label = ("%s  %s  (%s%.2f)"):format(sourceTag(d.chart), d.name, utf8.char(0x2605), starRating(d.chart))
         end
         local first = diffs[1].chart
-        local label = first.title or tostring(first.id)
+        local label = sourceTag(first) .. " " .. (first.title or tostring(first.id))
         if type(first.artist) == "string" and first.artist ~= "" then
             label = label .. " - " .. first.artist
         end
