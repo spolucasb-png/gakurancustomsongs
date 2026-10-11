@@ -26,6 +26,7 @@ Chart format v1 (GakuranCharts):
   }
 """
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -182,18 +183,74 @@ def sanitize_id(s: str) -> str:
     return s[:64] or "chart"
 
 
+# Absolute difficulty tiers by note density (notes/second). The names are the
+# ones the game's RhythmDifficulty colours (easy/medium/hard/extreme/insane).
+TIER_LIMITS = [(2.0, "easy"), (4.0, "medium"), (6.5, "hard"), (9.0, "extreme")]
+
+
+def tier_for(density: float) -> str:
+    for limit, name in TIER_LIMITS:
+        if density < limit:
+            return name
+    return "insane"
+
+
+def _sha1(path: Path) -> str:
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def place_media(src: Path, dst_dir: Path, base: str) -> Path:
+    """Copy src into dst_dir as <base><ext>, shared across a song's difficulties.
+
+    Dedupe is by content: an existing file with identical bytes is reused; a
+    different file already under that name is NEVER overwritten (the copy goes
+    to <base>_2, <base>_3, ...). Re-converting a song therefore cannot clobber
+    hand-edited/trimmed audio.
+    """
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    ext = src.suffix.lower()
+    digest = _sha1(src)
+    for i in range(1, 100):
+        dst = dst_dir / (f"{base}{ext}" if i == 1 else f"{base}_{i}{ext}")
+        if not dst.exists():
+            shutil.copy2(src, dst)
+            return dst
+        if _sha1(dst) == digest:
+            return dst
+    raise RuntimeError(f"too many media variants for {base}{ext}")
+
+
 def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path,
-                 copy_audio=True, mode_override=None):
+                 copy_audio=True, mode_override=None,
+                 include_nonmania=False, allow_lossy_keys=False):
     text = osu_path.read_text(encoding="utf-8", errors="replace")
     sections = parse_osu(text)
 
     mode = int(meta(sections, "Mode", "0") or 0)
-    gakuran_mode = mode_override or ("Keyboard" if mode == 3 else "Keyboard")
-    if mode in (1, 2):
+    gakuran_mode = mode_override or "Keyboard"
+    version = meta(sections, "Version", "Normal")
+    if mode != 3 and not include_nonmania:
+        # Only osu!mania maps map onto lanes faithfully; standard/taiko/catch
+        # become approximations (sliders -> holds, x -> lane). Opt in explicitly.
+        print(f"  - skipped '{version}': {MODE_NAMES.get(mode, mode)} is not osu!mania "
+              f"(approximate; pass --include-nonmania to convert anyway)", file=sys.stderr)
+        return None
+    if mode != 3:
         print(f"  ! WARNING: {MODE_NAMES.get(mode, mode)} has no good Gakuran equivalent; "
               f"converting as approximate {gakuran_mode}", file=sys.stderr)
     keys = int(float(meta(sections, "CircleSize", "4") or 4))
     keys = max(1, min(7, keys))
+    lane_cap = LANES.get(gakuran_mode, 4)
+    if mode == 3 and keys > lane_cap and not allow_lossy_keys:
+        # The engine has a fixed lane count per instrument and the loader drops
+        # lanes above it, so a >4K map would silently lose notes.
+        print(f"  - skipped '{version}': {keys}K exceeds the {lane_cap} lanes of {gakuran_mode} "
+              f"(notes would be lost; pass --allow-lossy-keys to convert anyway)", file=sys.stderr)
+        return None
 
     reds, svs = parse_timing(sections)
     if not reds:
@@ -211,8 +268,17 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
     title = meta(sections, "Title", "Unknown")
     artist = meta(sections, "Artist", "Unknown")
     creator = meta(sections, "Creator", "Unknown")
-    version = meta(sections, "Version", "Normal")
-    chart_id = sanitize_id(f"{title}_{version}")
+    # (version was read above)
+    # Ids: chart_id stays sanitize(title + version) so existing charts keep their
+    # ids. A title with no alphanumerics (e.g. "-+") used to collapse to just the
+    # version ("4k_sc"), which collides across songs; fall back to the beatmap set
+    # id or the folder name instead. song_id groups a song's difficulties.
+    id_stem = title
+    if not re.search(r"[a-zA-Z0-9]", title):
+        set_id = (meta(sections, "BeatmapSetID", "") or "").strip()
+        id_stem = f"set{set_id}" if set_id not in ("", "-1", "0") else osu_path.parent.name
+    song_id = sanitize_id(id_stem)
+    chart_id = sanitize_id(f"{id_stem}_{version}")
 
     anim_changes = [
         {"t": round(t / 1000.0, 3), "bpm": round(60000.0 / bl, 2)}
@@ -249,7 +315,18 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
         "charts": {gakuran_mode: notes},
         "noteCount": len(notes),
         "duration": round(duration, 2),
+        # multi-difficulty grouping (additive; the loader groups charts that
+        # share a songId into one wheel row with a difficulty picker)
+        "songId": song_id,
+        "tier": tier_for(len(notes) / max(duration, 1.0)),
+        "rank": 1,   # 1 = easiest in its song; finalised by assign_ranks()
+        "sourceMode": MODE_NAMES.get(mode, str(mode)),
+        "sourceKeys": keys if mode == 3 else None,
     }
+    if mode != 3:
+        chart["approximate"] = True
+    if chart["sourceKeys"] is None:
+        del chart["sourceKeys"]
     if anim_changes:
         chart["animationBpmChanges"] = anim_changes
     if scroll_changes:
@@ -259,9 +336,8 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
     audio_name = meta(sections, "AudioFilename", "audio.mp3")
     src_audio = osu_path.parent / audio_name
     if copy_audio and src_audio.exists():
-        audio_dir.mkdir(parents=True, exist_ok=True)
-        dst = audio_dir / f"{chart_id}{src_audio.suffix.lower()}"
-        shutil.copy2(src_audio, dst)
+        # one copy per SONG (shared by all its difficulties), deduped by content
+        dst = place_media(src_audio, audio_dir, song_id)
         chart["audioFile"] = f"GakuranCharts/Audio/{dst.name}"
     else:
         warnings.append("audio file not found next to .osu; chart has no audioFile")
@@ -273,9 +349,7 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
             bg = m.group(1)
             break
     if bg and (osu_path.parent / bg).exists():
-        asset_dir.mkdir(parents=True, exist_ok=True)
-        dst = asset_dir / f"{chart_id}{Path(bg).suffix.lower()}"
-        shutil.copy2(osu_path.parent / bg, dst)
+        dst = place_media(osu_path.parent / bg, asset_dir, song_id)
         chart["backgroundFile"] = f"GakuranCharts/Assets/{dst.name}"
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -290,6 +364,24 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
     return chart
 
 
+def assign_ranks(charts_dir: Path, charts: list):
+    """Rank each song's converted difficulties by note density (1 = easiest)
+    and rewrite their JSON. Only covers the charts of this run; the loader
+    treats rank as a hint and falls back to density when ranks disagree."""
+    by_song = {}
+    for c in charts:
+        by_song.setdefault(c["songId"], []).append(c)
+    for song_id, group in by_song.items():
+        group.sort(key=lambda c: (c["noteCount"] / max(c["duration"], 1.0), c["noteCount"]))
+        for i, c in enumerate(group, 1):
+            c["rank"] = i
+            (charts_dir / f"{c['id']}.json").write_text(
+                json.dumps(c, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        if len(group) > 1:
+            print(f"  song '{song_id}': " + " < ".join(
+                f"{c['difficulty'][c['mode']]} ({c['tier']})" for c in group))
+
+
 def main():
     ap = argparse.ArgumentParser(description="Convert osu! maps to GakuranCharts JSON")
     ap.add_argument("input", type=Path, help=".osz or .osu file (or directory of .osu)")
@@ -297,33 +389,40 @@ def main():
     ap.add_argument("--audio-dir", type=Path, required=True, help="output audio dir")
     ap.add_argument("--assets-dir", type=Path, required=True, help="output assets dir")
     ap.add_argument("--mode", choices=list(LANES), help="force Gakuran instrument mode")
+    ap.add_argument("--include-nonmania", action="store_true",
+                    help="also convert osu!standard/taiko/catch maps (approximate)")
+    ap.add_argument("--allow-lossy-keys", action="store_true",
+                    help="also convert maps with more keys than lanes (extra lanes are dropped)")
     args = ap.parse_args()
 
+    kw = dict(mode_override=args.mode, include_nonmania=args.include_nonmania,
+              allow_lossy_keys=args.allow_lossy_keys)
     inp = args.input
-    converted = 0
+    results = []
     if inp.suffix.lower() == ".osz":
         with zipfile.ZipFile(inp) as zf:
             tmp = args.charts_dir / "_osz_tmp"
             tmp.mkdir(parents=True, exist_ok=True)
             zf.extractall(tmp)
             for osu in sorted(tmp.glob("*.osu")):
-                if convert_file(osu, args.charts_dir, args.audio_dir, args.assets_dir,
-                                mode_override=args.mode):
-                    converted += 1
+                c = convert_file(osu, args.charts_dir, args.audio_dir, args.assets_dir, **kw)
+                if c:
+                    results.append(c)
             shutil.rmtree(tmp, ignore_errors=True)
     elif inp.suffix.lower() == ".osu":
-        if convert_file(inp, args.charts_dir, args.audio_dir, args.assets_dir,
-                        mode_override=args.mode):
-            converted = 1
+        c = convert_file(inp, args.charts_dir, args.audio_dir, args.assets_dir, **kw)
+        if c:
+            results.append(c)
     elif inp.is_dir():
         for osu in sorted(inp.glob("*.osu")):
-            if convert_file(osu, args.charts_dir, args.audio_dir, args.assets_dir,
-                            mode_override=args.mode):
-                converted += 1
+            c = convert_file(osu, args.charts_dir, args.audio_dir, args.assets_dir, **kw)
+            if c:
+                results.append(c)
     else:
         ap.error(f"unsupported input: {inp}")
-    print(f"Done: {converted} chart(s) converted")
-    return 0 if converted else 1
+    assign_ranks(args.charts_dir, results)
+    print(f"Done: {len(results)} chart(s) converted")
+    return 0 if results else 1
 
 
 if __name__ == "__main__":

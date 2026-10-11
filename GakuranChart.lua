@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0
+    GakuranChart v2.0.3
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0"
+local VERSION = "2.0.3"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -108,7 +108,7 @@ pcall(function()
     local gui = player:FindFirstChildOfClass("PlayerGui")
     if gui then
         for _, g in ipairs(gui:GetChildren()) do
-            if g.Name == "GakuranChartUnderframe" then
+            if g.Name == "GakuranChartUnderframe" or g.Name == "GakuranChartDifficulty" then
                 g:Destroy()
             end
         end
@@ -145,6 +145,10 @@ local customIds = {}
 -- chart JSONs by song id: needed to build SV models for plays the
 -- loader didn't start itself (song wheel / stage / relay).
 local customCharts = {}
+-- Multi-difficulty parents: songId -> { id, song, mode, label, diffs = { {chart, density}, ... } }.
+-- One registry/wheel row per song; the difficulty picker (StartPlay hook) opens
+-- on click. Rebuilt by injectAllCharts; instance-local, never shared via _G.
+local parents = {}
 
 -- Hook ownership. The three safety nets wrap game functions and the loader can
 -- be executed many times in one client, so the wrappers are owned by a shared
@@ -333,6 +337,140 @@ function HK.makeSongFilter(b)
     end
 end
 HK.ensure("ListPlayableSongInfosForHeld", service, "ListPlayableSongInfosForHeld", HK.makeSongFilter)
+
+-- Difficulty-picker hook on service.StartPlay (every wheel row, search row and
+-- stage start goes through it). For one of OUR multi-difficulty parent songs the
+-- call is swallowed and the loader's picker opens instead; everything else - all
+-- real game songs, legacy single charts, the picker's own start (b.bypass) -
+-- reaches the original with the exact original arguments. The wrapper closes
+-- over its base record only; the live loader instance registers its handler on
+-- the record (b.handler) and clears it in cleanup, so a retired instance is
+-- never called and a wrapper left behind (deferred restore) is a pure
+-- pass-through.
+function HK.makeStartPlay(b)
+    return function(self, songId, ...)
+        local h = b.handler
+        if h and not b.bypass then
+            local okH, swallow = pcall(h, songId, ...)
+            if okH and swallow == true then return end
+        end
+        return b.under(self, songId, ...)
+    end
+end
+HK.ensure("StartPlay", service, "StartPlay", HK.makeStartPlay)
+
+----------------------------------------------------------------
+-- Wheel-native difficulty submenu (multi-difficulty parent rows).
+-- The guitar submenu's CONTENT is hard-coded and unusable, but the wheel's
+-- PAGE SYSTEM is generic: _applySongMenu renders the guitar page when
+-- _guitarVariantSongId is set, else the song list. We add a third page the
+-- same way - our own pending flag checked first by a wrapper on
+-- _applySongMenu - so difficulty selection lives inside the wheel (Back
+-- returns to the list, picks get the native flash + select sound). The
+-- standalone overlay stays as the fallback when the wheel controller can't
+-- be driven. The controller is the t_8 singleton (one per client); it is
+-- found by a structural getgc scan and revalidated on every use. Only one
+-- wheel method is wrapped, under the same ownership discipline; Close is
+-- deliberately NOT wrapped (nothing wheel-side needs clearing - the pending
+-- flag lives on our base record with a timestamp, so Toggle-close can never
+-- stick it).
+----------------------------------------------------------------
+local wheelCtl = nil   -- cached wheel controller, revalidated per use
+local wheelLastScan = -1e18
+-- force=true bypasses the rescan gate (user-triggered paths where a few
+-- seconds are acceptable); init and diagnostics use the gated call
+local function findWheelController(force)
+    local function usable(c)
+        -- regular indexing: the singleton instance inherits these methods
+        -- from its class through a metatable (rawget would miss them)
+        if type(c) ~= "table" then return false end
+        local okM, m = pcall(function() return c._applySongMenu end)
+        local okS, s = pcall(function() return c._setSlot end)
+        local okO, o = pcall(function() return c.Open end)
+        local okT, t = pcall(function() return c._transitionPage end)
+        local okC, cl = pcall(function() return c.Close end)
+        local okL, li = pcall(function() return c._applySongListMenu end)
+        return okM and type(m) == "function" and okS and type(s) == "function"
+            and okO and type(o) == "function" and okT and type(t) == "function"
+            and okC and type(cl) == "function" and okL and type(li) == "function"
+    end
+    if usable(wheelCtl) then return wheelCtl end
+    wheelCtl = nil
+    -- getgc enumeration misses under load; a scan that just ran and missed is
+    -- not worth repeating immediately (callers retry on later clicks anyway)
+    if os.time() - wheelLastScan < 20 and not force then return nil end
+    wheelLastScan = os.time()
+    -- The class table carries the same method names as own fields but no
+    -- instance state; the singleton instance has both. Match the instance.
+    for _, v in ipairs(getgc(true)) do
+        if type(v) == "table" then
+            local okU, st = pcall(rawget, v, "_uiState")
+            local okO, op = pcall(rawget, v, "_isOpen")
+            if okU and type(st) == "string" and okO and type(op) == "boolean" and usable(v) then
+                wheelCtl = v
+                break
+            end
+        end
+    end
+    return wheelCtl
+end
+
+-- List-page wrapper: pending valid + per-run renderer present -> our submenu
+-- page; otherwise clear any stale flag and run the game's list renderer. (An
+-- earlier revision wrapped the whole router and skipped its prologue and
+-- epilogue; wrapping the list page keeps _ensureGui, the search refresh, the
+-- header deco and _notifyFocus native.) Closes over the base record only, so
+-- it stays correct across re-executions. A render stores the wheel's
+-- transition token; any close/reopen bumps it, so a stale pending can never
+-- stick the menu even if an explicit clear is missed. The 30 s wall-clock
+-- expiry is the backstop.
+function HK.makeWheelListMenu(b)
+    return function(self, ...)
+        local pend = b.pendingSongId
+        local render = b.renderMenu
+        local okT, tok = pcall(function() return self._transitionToken end)
+        local tokMatch = okT and b.pendingToken ~= nil and tok == b.pendingToken
+        local fresh = (os.time() - (b.pendingAt or 0)) < 30
+        if type(pend) == "string" and type(render) == "function"
+            and (tokMatch or (b.pendingToken == nil and fresh)) then
+            local okR, did = pcall(render, self, pend)
+            if okR and did == true then
+                if okT then b.pendingToken = tok end
+                return
+            end
+        end
+        b.pendingSongId = nil
+        return b.under(self, ...)
+    end
+end
+do
+    local c = findWheelController()
+    if c then
+        HK.ensure("WheelMenu", c, "_applySongListMenu", HK.makeWheelListMenu)
+    else
+        warn("[GakuranChart] Wheel controller not found - difficulty picker falls back to overlay")
+    end
+    local wb = hookBase["WheelMenu"]
+    if type(wb) == "table" then wb.pendingSongId = nil; wb.pendingToken = nil end
+end
+
+-- Discover + wrap on demand (init-time discovery can miss under load; the
+-- trigger path completes the wiring on first use). HK.ensure is idempotent:
+-- same controller reuses the record, a changed one rebuilds it.
+local function armWheelMenu()
+    findWheelController(true)
+    if wheelCtl then
+        HK.ensure("WheelMenu", wheelCtl, "_applySongListMenu", HK.makeWheelListMenu)
+    end
+    local wb = hookBase["WheelMenu"]
+    if type(wb) == "table" then
+        if HK.renderWheelSubmenu then
+            wb.renderMenu = HK.renderWheelSubmenu
+        end
+        return wb
+    end
+    return nil
+end
 
 ----------------------------------------------------------------
 -- 2. Settings persistence
@@ -616,7 +754,7 @@ function LG.isOurs(s)
     return any
 end
 
-local function injectSong(song)
+local function injectSong(song, noList)
     local byId, list = LG.tables()
     if not byId then error("song registry unavailable") end
     local L = LG.ledger
@@ -642,7 +780,7 @@ local function injectSong(song)
 
     byId[id] = song
     local listed = false
-    if settings.showInWheel then
+    if settings.showInWheel and not noList then
         local genuine = false
         for _, s in ipairs(list) do
             if type(s) == "table" and s.id == id and s ~= song and not LG.isOurs(s) then
@@ -680,15 +818,87 @@ end
 -- Our charts are Keyboard mode, so they show up while a keyboard is
 -- equipped. injectSong previously only ran when a chart was PLAYED,
 -- so the wheel never listed anything else - inject them all instead.
+-- Charts that share a songId (written by tools/osu2gakuran.py) become ONE
+-- wheel row: the parent song, with the difficulties inside it (never as
+-- registry rows). Clicking the row opens the difficulty picker (StartPlay
+-- hook, section 5.95). Charts without a songId, and songs with a single chart,
+-- stay plain rows exactly as before.
+local function chartDensity(c)
+    local dur = tonumber(c.duration)
+    if not dur or dur <= 0 then dur = 1 end
+    return #c.charts[c.mode] / dur
+end
+
+-- Easiest -> hardest. `rank` is only a hint (the converter ranks per run, so a
+-- later-added difficulty can duplicate one), so it is used only when every
+-- member has a distinct rank; otherwise note density decides.
+local function sortDiffs(diffs)
+    local ranked, seen = true, {}
+    for _, d in ipairs(diffs) do
+        local r = d.chart.rank
+        if type(r) ~= "number" or seen[r] then ranked = false break end
+        seen[r] = true
+    end
+    table.sort(diffs, function(a, b)
+        if ranked then return a.chart.rank < b.chart.rank end
+        if a.density ~= b.density then return a.density < b.density end
+        return a.chart.id < b.chart.id
+    end)
+end
+
+local function diffName(chart)
+    local d = type(chart.difficulty) == "table" and chart.difficulty[chart.mode] or nil
+    return type(d) == "string" and d ~= "" and d or "Custom"
+end
+
 local function injectAllCharts()
     if not settings.showInWheel then return 0 end
     local count = 0
+    table.clear(parents)
+    local groups, order = {}, {}
+    local function injectSingle(chart)
+        local okB, song = pcall(buildGameSong, chart)
+        if okB and song then
+            pcall(injectSong, song)
+            count += 1
+        end
+    end
     for _, path in ipairs(listChartFiles()) do
         local okR, chart = pcall(readChart, path)
         if okR and type(chart) == "table" and type(chart.id) == "string" then
             customCharts[chart.id] = chart
-            local okB, song = pcall(buildGameSong, chart)
+            local sid = chart.songId
+            if type(sid) == "string" and sid ~= "" then
+                if not groups[sid] then
+                    groups[sid] = {}
+                    order[#order + 1] = sid
+                end
+                table.insert(groups[sid], { chart = chart, density = chartDensity(chart) })
+            else
+                injectSingle(chart)
+            end
+        end
+    end
+    for _, sid in ipairs(order) do
+        local group = groups[sid]
+        -- a parent's difficulties must share one instrument mode
+        local mode = group[1].chart.mode
+        local uniform = true
+        for _, d in ipairs(group) do
+            if d.chart.mode ~= mode then uniform = false end
+        end
+        if #group == 1 or not uniform then
+            for _, d in ipairs(group) do injectSingle(d.chart) end
+        else
+            sortDiffs(group)
+            local first = group[1].chart
+            local okB, song = pcall(buildGameSong, first)
             if okB and song then
+                song.id = sid   -- the parent row owns the songId
+                local label = { [mode] = ("%d diffs"):format(#group) }
+                song.difficulty = label
+                customCharts[sid] = first   -- SV facade; re-pointed at pick time
+                parents[sid] = { id = sid, song = song, mode = mode, label = label, diffs = group }
                 pcall(injectSong, song)
                 count += 1
             end
@@ -1628,6 +1838,16 @@ end
 ----------------------------------------------------------------
 local Rayfield = nil   -- assigned by buildUI() in section 6
 
+-- Difficulty picker overlay (built in section 5.95). Declared here so cleanup,
+-- which is registered earlier than the code that builds the overlay, can drop it.
+local pickerGui = nil
+local function destroyPicker()
+    if pickerGui then
+        pcall(function() pickerGui:Destroy() end)
+        pickerGui = nil
+    end
+end
+
 local function isOurSessionPlaying()
     local ok, yes = pcall(function()
         local sess = service._session
@@ -1708,7 +1928,7 @@ function HK.restore()
     local base = _G.GakuranChartHookBase
     if type(base) ~= "table" or base.version ~= HOOK_BASE_VERSION then return true end
     local allGone = true
-    for _, name in ipairs({ "SubmitStats", "QueryJamSync", "FireStart", "ListPlayableSongInfosForHeld" }) do
+    for _, name in ipairs({ "SubmitStats", "QueryJamSync", "FireStart", "ListPlayableSongInfosForHeld", "StartPlay", "WheelMenu" }) do
         local b = base[name]
         if type(b) == "table" and type(b.mod) == "table" and type(b.wrap) == "function" then
             local cur = b.mod[b.key]
@@ -1746,6 +1966,22 @@ end
 _G.GakuranChartCleanup = function()
     if not HK.cleaned then
         HK.cleaned = true
+        -- Picker first: stop swallowing StartPlay (the wrapper turns into a pure
+        -- pass-through) and drop the overlay before anything else is torn down.
+        pcall(function()
+            local b = _G.GakuranChartHookBase and _G.GakuranChartHookBase["StartPlay"]
+            if type(b) == "table" and b.handler == HK.pickerHandler then
+                b.handler = nil
+                b.bypass = false
+            end
+        end)
+        pcall(function()
+            local wb = _G.GakuranChartHookBase and _G.GakuranChartHookBase["WheelMenu"]
+            if type(wb) == "table" and wb.renderMenu == HK.renderWheelSubmenu then
+                wb.renderMenu = nil
+            end
+        end)
+        pcall(destroyPicker)
         local playing = false
         pcall(function() playing = service:IsPlaying() end)
         if playing and isOurSessionPlaying() then
@@ -1790,7 +2026,9 @@ local function playChart()
     if type(currentChart.id) == "string" then
         customCharts[currentChart.id] = currentChart
     end
-    injectSong(song)
+    -- A difficulty of a multi-difficulty parent is registered (so it can play)
+    -- but never gets its own wheel row: the parent row already covers it.
+    injectSong(song, type(currentChart.songId) == "string" and parents[currentChart.songId] ~= nil)
     createUnderframe(currentChart)
 
     -- Pre-cache the real audio length so the session lasts the full track
@@ -1886,6 +2124,399 @@ local function stopChart()
     if playStatusCallback then playStatusCallback("Stopped") end
 end
 
+----------------------------------------------------------------
+-- 5.95 Difficulty picker (multi-difficulty parent rows)
+-- The wheel starts a row with  RhythmServiceClient:Get():StartPlay(id, mode)
+-- and closes itself right after the call returns. For one of our parent rows
+-- the StartPlay hook swallows that call and runs onStartPlay, which opens this
+-- overlay (the wheel is already closing, so the overlay stands alone). Picking
+-- a difficulty swaps that chart's data INTO the parent's song object - the
+-- same table the registry and the wheel hold, so nothing is re-registered -
+-- re-points the SV chart facade, then makes the real StartPlay with the
+-- bypass flag set. All of it is synchronous on one thread: no race, nothing
+-- to undo (the row label is put back when the session has ended).
+----------------------------------------------------------------
+local TIER_COLORS = {
+    easy = Color3.fromRGB(64, 214, 112),
+    medium = Color3.fromRGB(246, 176, 56),
+    hard = Color3.fromRGB(240, 78, 62),
+    extreme = Color3.fromRGB(178, 82, 240),
+    insane = Color3.fromRGB(255, 48, 138),
+}
+local TIER_UNRATED = Color3.fromRGB(84, 92, 120)
+
+local function tierColor(chart)
+    local t = type(chart.tier) == "string" and chart.tier:lower() or ""
+    return TIER_COLORS[t] or TIER_UNRATED
+end
+
+local function fmtDuration(sec)
+    sec = math.max(0, math.floor((tonumber(sec) or 0) + 0.5))
+    return ("%d:%02d"):format(sec // 60, sec % 60)
+end
+
+-- Decimal star estimate from note density, anchored so whole numbers match
+-- the tier-colour bands (easy<2, medium<4, hard<6.5, extreme<9 notes/s).
+-- Our own heuristic, shown beside difficulty names - NOT osu! star rating
+-- (which is computed by the osu! client and never stored in .osu files).
+local function starRating(chart)
+    local d = 0
+    pcall(function()
+        local dur = tonumber(chart.duration)
+        if not dur or dur <= 0 then dur = 1 end
+        d = #chart.charts[chart.mode] / dur
+    end)
+    local s
+    if d < 2 then s = 0.5 + d * 0.75
+    elseif d < 4 then s = 2 + (d - 2) * 0.5
+    elseif d < 6.5 then s = 3 + (d - 4) * 0.4
+    elseif d < 9 then s = 4 + (d - 6.5) * 0.4
+    else s = 5 + (d - 9) * 0.3 end
+    if s > 9.99 then s = 9.99 end
+    return s
+end
+
+-- Fields of the parent song object that describe ONE chart.
+local SWAP_FIELDS = {
+    "title", "artist", "charter", "bpm", "animationbpm", "animationBpmChanges",
+    "startAt", "offsetMs", "approach", "charts", "soundIds", "difficulty", "coverId",
+}
+
+local function pickDifficultyInner(parent, d)
+    local chart = d.chart
+    local okI, busy = pcall(function() return service:IsPlaying() end)
+    if okI and busy then
+        notify("Difficulty", "Stop the current song first", true)
+        return false
+    end
+    -- Wheel clicks carry no attribute setup (playChart does this for Rayfield
+    -- plays); without PlayingInstrument the engine's StartPlay returns silently.
+    local okA, attrErr = saveAndSetAttributes(chart.mode)
+    if not okA then
+        notify("Character error", attrErr, true)
+        return
+    end
+    local fresh, err = buildGameSong(chart)
+    if not fresh then
+        restoreAttributes()
+        notify("Audio error", tostring(err), true)
+        return false
+    end
+    local song = parent.song
+    for _, k in ipairs(SWAP_FIELDS) do song[k] = fresh[k] end
+    customCharts[parent.id] = chart   -- the SV model is built from this
+    stopSv()
+    pcall(function() service._carryOverStats = nil end)   -- no score carry-over
+
+    -- Pre-cache the real audio length so the session lasts the full track
+    -- (same as playChart; a wheel start would otherwise end at chart end + 3 s).
+    local audioAsset = fresh.soundIds[chart.mode]
+    if chartUtil and audioAsset then
+        local okC, pre = pcall(chartUtil.GetCachedSoundLength, audioAsset)
+        if not (okC and pre) then pcall(cacheAudioLength, audioAsset) end
+    end
+
+    local b = hookBase["StartPlay"]
+    if type(b) == "table" then b.bypass = true end
+    local okP, errP = pcall(function()
+        service:StartPlay(parent.id, parent.mode, { showCountdown = true })
+    end)
+    if type(b) == "table" then b.bypass = false end
+    if not okP then
+        restoreAttributes()
+        notify("Play failed", tostring(errP), true)
+        return false
+    end
+    -- Success: drop the submenu state and close the wheel (mirrors the
+    -- guitar slots, which StartPlay then Close). No-ops when the wheel is
+    -- already closed (overlay/API starts) or unreachable.
+    local wb = hookBase["WheelMenu"]
+    if type(wb) == "table" then wb.pendingSongId = nil; wb.pendingToken = nil end
+    local ctl = findWheelController()
+    if ctl then pcall(function() ctl:Close() end) end
+    stopSv()
+    local okSv, svErr = pcall(function()
+        svModel = buildSvModel(chart, song)
+        svModelId = song.id
+    end)
+    if not okSv then
+        stopSv()
+        warn("[GakuranChart] SV setup failed: " .. tostring(svErr))
+    end
+    notify("Now playing", ("%s - %s [%s]"):format(song.title, song.artist, diffName(chart)))
+    return true
+end
+
+-- Re-entrancy guard: the slot handler runs pickDifficulty synchronously, so a
+-- second click while the first is still yielding (audio pre-cache on an
+-- uncached song) would otherwise swap state twice and start two plays. The
+-- busy flag turns the second click into a clean refusal (red flash); the
+-- IsPlaying guard still covers plays already running. Reset on every exit,
+-- including throws, so the flag can never stick.
+local picking = false
+local function pickDifficulty(parent, d)
+    if picking then return false end
+    picking = true
+    local ok, res = pcall(pickDifficultyInner, parent, d)
+    picking = false
+    if not ok then error(res, 0) end
+    return res
+end
+
+local function openPicker(parent)
+    destroyPicker()
+    local pg = player:FindFirstChildOfClass("PlayerGui")
+    if not pg then return end
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "GakuranChartDifficulty"
+    gui.DisplayOrder = 100
+    gui.IgnoreGuiInset = true
+    gui.ResetOnSpawn = false
+    gui.Parent = pg
+    pickerGui = gui
+
+    local function round(inst, px)
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, px)
+        c.Parent = inst
+    end
+    local function text(parentInst, str, size, font, color, pos, sz, align)
+        local l = Instance.new("TextLabel")
+        l.BackgroundTransparency = 1
+        l.Text = str
+        l.TextSize = size
+        l.Font = font
+        l.TextColor3 = color
+        l.TextXAlignment = align or Enum.TextXAlignment.Left
+        l.TextTruncate = Enum.TextTruncate.AtEnd
+        l.Position = pos
+        l.Size = sz
+        l.Parent = parentInst
+        return l
+    end
+
+    local shade = Instance.new("TextButton")   -- click outside = close
+    shade.Name = "Shade"
+    shade.Size = UDim2.fromScale(1, 1)
+    shade.BackgroundColor3 = Color3.new(0, 0, 0)
+    shade.BackgroundTransparency = 0.45
+    shade.BorderSizePixel = 0
+    shade.AutoButtonColor = false
+    shade.Text = ""
+    shade.Parent = gui
+    shade.Activated:Connect(destroyPicker)
+
+    local n = #parent.diffs
+    local rowH, gap = 54, 8
+    local visible = math.min(n, 6)
+    local listH = visible * rowH + (visible - 1) * gap
+    local panelW = 440
+    local panel = Instance.new("Frame")
+    panel.Name = "Panel"
+    panel.Active = true   -- sink clicks so they don't reach the shade
+    panel.AnchorPoint = Vector2.new(0.5, 0.5)
+    panel.Position = UDim2.fromScale(0.5, 0.5)
+    panel.Size = UDim2.fromOffset(panelW, 70 + listH + 12 + 40 + 16)
+    panel.BackgroundColor3 = Color3.fromRGB(22, 24, 34)
+    panel.BorderSizePixel = 0
+    panel.Parent = gui
+    round(panel, 10)
+
+    local head = parent.diffs[1].chart
+    text(panel, tostring(head.title or parent.id), 22, Enum.Font.GothamBold, Color3.new(1, 1, 1),
+        UDim2.fromOffset(16, 10), UDim2.fromOffset(panelW - 32, 28))
+    text(panel, tostring(head.artist or ""), 14, Enum.Font.Gotham, Color3.fromRGB(160, 166, 190),
+        UDim2.fromOffset(16, 38), UDim2.fromOffset(panelW - 32, 18))
+
+    local list = Instance.new("ScrollingFrame")
+    list.Name = "List"
+    list.Position = UDim2.fromOffset(16, 70)
+    list.Size = UDim2.fromOffset(panelW - 32, listH)
+    list.BackgroundTransparency = 1
+    list.BorderSizePixel = 0
+    list.ScrollBarThickness = n > visible and 4 or 0
+    list.CanvasSize = UDim2.fromOffset(0, n * rowH + (n - 1) * gap)
+    list.Parent = panel
+    local rowW = panelW - 32 - (n > visible and 8 or 0)
+
+    for i, d in ipairs(parent.diffs) do
+        local chart = d.chart
+        local btn = Instance.new("TextButton")
+        btn.Name = "Diff" .. i
+        btn.Position = UDim2.fromOffset(0, (i - 1) * (rowH + gap))
+        btn.Size = UDim2.fromOffset(rowW, rowH)
+        btn.BackgroundColor3 = Color3.fromRGB(34, 37, 52)
+        btn.BorderSizePixel = 0
+        btn.AutoButtonColor = true
+        btn.Text = ""
+        btn.Parent = list
+        round(btn, 8)
+        local bar = Instance.new("Frame")
+        bar.Size = UDim2.fromOffset(6, rowH)
+        bar.BackgroundColor3 = tierColor(chart)
+        bar.BorderSizePixel = 0
+        bar.Parent = btn
+        round(bar, 3)
+        text(btn, string.upper(diffName(chart)), 18, Enum.Font.GothamBold, Color3.new(1, 1, 1),
+            UDim2.fromOffset(18, 6), UDim2.fromOffset(rowW - 28, 24))
+        text(btn, ("%d notes  |  %s  |  %.1f notes/s"):format(
+                #chart.charts[chart.mode], fmtDuration(chart.duration), d.density),
+            13, Enum.Font.Gotham, Color3.fromRGB(160, 166, 190),
+            UDim2.fromOffset(18, 31), UDim2.fromOffset(rowW - 28, 18))
+        btn.Activated:Connect(function()
+            destroyPicker()
+            -- own thread: the audio-length pre-cache can yield
+            task.spawn(function()
+                local okB, errB = pcall(pickDifficulty, parent, d)
+                if not okB then notify("Difficulty error", tostring(errB), true) end
+            end)
+        end)
+    end
+
+    local back = Instance.new("TextButton")
+    back.Name = "Back"
+    back.Position = UDim2.fromOffset(16, 70 + listH + 12)
+    back.Size = UDim2.fromOffset(panelW - 32, 40)
+    back.BackgroundColor3 = Color3.fromRGB(46, 50, 70)
+    back.BorderSizePixel = 0
+    back.AutoButtonColor = true
+    back.Text = "BACK"
+    back.TextSize = 16
+    back.Font = Enum.Font.GothamBold
+    back.TextColor3 = Color3.fromRGB(200, 205, 225)
+    back.Parent = panel
+    round(back, 8)
+    back.Activated:Connect(destroyPicker)
+end
+
+-- Called from the StartPlay wrapper with the original arguments. Returns true
+-- to swallow the call (a parent row was clicked). Anything else - real songs,
+-- legacy single charts - returns false and reaches the game untouched.
+local function onStartPlay(songId)
+    if _G.GakuranChartGen ~= MYGEN then return false end
+    local parent = type(songId) == "string" and parents[songId] or nil
+    if not parent then return false end
+    -- the wheel calls Close() right after StartPlay returns, so a native
+    -- submenu can only open afterwards: schedule it, with the standalone
+    -- overlay as the fallback when the wheel controller can't be driven
+    task.defer(function()
+        if _G.GakuranChartGen ~= MYGEN then return end
+        local shown = false
+        if HK.openWheelSubmenu then
+            local okW, res = pcall(HK.openWheelSubmenu, parent)
+            shown = okW and res == true
+        end
+        if not shown then
+            local wb = hookBase["WheelMenu"]
+            if type(wb) == "table" then wb.pendingSongId = nil end
+            local okO, errO = pcall(openPicker, parent)
+            if not okO then notify("Picker error", tostring(errO), true) end
+        end
+    end)
+    return true
+end
+----------------------------------------------------------------
+-- 5.96 Native wheel submenu page (multi-difficulty parent rows).
+-- Renders inside the game's own wheel through its slot primitives, the way
+-- _applyGuitarVariantSubmenu does: Back nav slot, one button per difficulty
+-- (tier-coloured strip, decimal star estimate beside the name), remaining
+-- slots cleared. Picks run pickDifficulty, then close the wheel and return
+-- "play" (native flash + select sound). Registered per run on the shared
+-- WheelMenu record (like b.handler); the stable router wrapper only reads
+-- the record, so it stays correct across re-executions.
+----------------------------------------------------------------
+function HK.renderWheelSubmenu(controller, pid)
+    local parent = parents[pid]
+    if not parent then return false end
+    local diffs = parent.diffs
+    if type(diffs) ~= "table" or #diffs == 0 then return false end
+    controller._menuPage, controller._menuPages, controller._menuResults = 1, 1, nil
+    controller:_setNavSlot(1, "\227\130\130\227\129\169\227\130\139", function()
+        local wb = hookBase["WheelMenu"]
+        if type(wb) == "table" then wb.pendingSongId = nil; wb.pendingToken = nil end
+        controller:_transitionPage(function() end)
+    end, true, "BACK", "back")
+    local shown = math.min(#diffs, 9)
+    if #diffs > 9 then warn("[GakuranChart] Difficulty submenu shows 9 of " .. #diffs .. " difficulties") end
+    for i = 1, shown do
+        local dd = diffs[i]
+        local chart = dd.chart
+        local name = string.upper(diffName(chart))
+        local title = name .. "  ★" .. ("%.2f"):format(starRating(chart))
+        local sub = ("%d notes  |  %s"):format(#chart.charts[chart.mode], fmtDuration(chart.duration))
+        local song = parent.song
+        local art = { artist = song.artist, coverId = song.coverId, diff = name,
+            length = fmtDuration(chart.duration), playMode = parent.mode }
+        controller:_setSlot(1 + i, title, function()
+            local okB, resB = pcall(pickDifficulty, parent, dd)
+            if not okB then
+                notify("Difficulty error", tostring(resB), true)
+                return false
+            end
+            if resB == true then return "play" end
+            return false
+        end, false, nil, sub, tierColor(chart), false, nil, art)
+    end
+    for j = 2 + shown, 10 do controller:_setSlot(j, "", nil) end
+    return true
+end
+
+-- Drive the native submenu for a parent: flag the router record, then open
+-- (lands straight on our page) or transition (wheel already open). Returns
+-- true only on the paths that show the submenu; callers fall back to the
+-- overlay otherwise.
+function HK.openWheelSubmenu(parent)
+    local wb = armWheelMenu()
+    if type(wb) ~= "table" then return false end
+    local c = findWheelController()
+    if not c then return false end
+    wb.pendingSongId = parent.id
+    wb.pendingAt = os.time()
+    wb.pendingToken = nil
+    for _ = 1, 30 do
+        local okS, st = pcall(function() return c._uiState end)
+        if okS and st == "Open" then
+            local okT = pcall(function() c:_transitionPage(function() end) end)
+            if not okT then
+                wb.pendingSongId = nil
+                wb.pendingToken = nil
+                return false
+            end
+            return true
+        end
+        if okS and st == "Closed" then break end
+        task.wait(0.05)
+    end
+    -- the wait loop above only breaks early on Open; anything else here means
+    -- it timed out in a transitional state, where Open() would silently no-op
+    local okS2, st2 = pcall(function() return c._uiState end)
+    if not (okS2 and st2 == "Closed") then
+        wb.pendingSongId = nil
+        wb.pendingToken = nil
+        return false
+    end
+    if pcall(function() c:Open() end) then
+        local okI, isOpen = pcall(function() return c._isOpen end)
+        if okI and isOpen == true then return true end
+    end
+    wb.pendingSongId = nil
+    wb.pendingToken = nil
+    return false
+end
+
+HK.pickerHandler = onStartPlay
+do
+    local b = hookBase["StartPlay"]
+    if type(b) == "table" then
+        b.handler = onStartPlay
+        b.bypass = false
+    end
+    local wb = hookBase["WheelMenu"]
+    if type(wb) == "table" then
+        wb.renderMenu = HK.renderWheelSubmenu
+    end
+end
+
 -- Watch for natural song end to clean up local state.
 -- IMPORTANT: do NOT restore attributes while the results screen is still
 -- shown — restoring PlayingInstrument to nil triggers the service's
@@ -1924,6 +2555,11 @@ task.spawn(function()
                 restoreAttributes()
                 destroyUnderframe()
                 pcall(stopSv)
+                -- parent rows show "N diffs" again (a pick had swapped in the
+                -- played difficulty's name for the results screen)
+                for _, p in pairs(parents) do
+                    pcall(function() p.song.difficulty = p.label end)
+                end
                 if playStatusCallback and not stopRequested then
                     playStatusCallback("Song finished")
                 end
@@ -2265,6 +2901,68 @@ _G.GakuranChart = {
     stop = stopChart,
     current = function() return currentChartPath end,
     skins = listSkinPacks,
+    -- Multi-difficulty parents: { songId = { difficulty names, easiest first } }
+    parents = function()
+        local out = {}
+        for id, p in pairs(parents) do
+            local names = {}
+            for i, d in ipairs(p.diffs) do names[i] = diffName(d.chart) end
+            out[id] = names
+        end
+        return out
+    end,
+    -- Console equivalents of clicking a parent row / a difficulty button.
+    openPicker = function(songId)
+        local p = parents[songId]
+        if not p then return false end
+        -- native wheel page first (falls back to the overlay when the wheel
+        -- controller can't be driven)
+        if HK.openWheelSubmenu then
+            local okW, res = pcall(HK.openWheelSubmenu, p)
+            if okW and res == true then return true end
+        end
+        openPicker(p)
+        return true
+    end,
+    pick = function(songId, index)
+        local p = parents[songId]
+        local d = p and p.diffs[index]
+        if not d then return false end
+        task.spawn(pickDifficulty, p, d)   -- may yield (audio pre-cache)
+        return true
+    end,
+    closePicker = function()
+        local wb = hookBase["WheelMenu"]
+        if type(wb) == "table" then wb.pendingSongId = nil end
+        local c = findWheelController()
+        if c then
+            local okS, st = pcall(function() return c._uiState end)
+            if okS and st == "Open" then
+                -- back to the song list with the native transition
+                pcall(function() c:_transitionPage(function() end) end)
+            end
+        end
+        destroyPicker()
+    end,
+    pickerStatus = function()
+        local b = hookBase["StartPlay"]
+        local wb = hookBase["WheelMenu"]
+        local n = 0
+        for _ in pairs(parents) do n += 1 end
+        local pendingValid = false
+        if type(wb) == "table" and type(wb.pendingSongId) == "string" then
+            pendingValid = (os.time() - (wb.pendingAt or 0)) < 30
+        end
+        return {
+            parents = n,
+            open = pickerGui ~= nil,
+            hooked = type(b) == "table" and b.mod.StartPlay == b.wrap,
+            handlerSet = type(b) == "table" and b.handler == HK.pickerHandler,
+            bypass = type(b) == "table" and b.bypass == true,
+            wheel = findWheelController() ~= nil,
+            submenuPending = pendingValid,
+        }
+    end,
     sv = function()
         if svModel then return #svModel.pts end
         return 0
