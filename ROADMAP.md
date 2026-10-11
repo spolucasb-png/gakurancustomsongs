@@ -47,7 +47,7 @@ Items are ordered: safety first, then cheap wins, then features.
 - [ ] Fix `if type(getfenv) then` (L41) to `== "function"`.
 - [ ] Create `SKINS_DIR` in the folder loop (L195).
 - [ ] Use `Rayfield:Notify` for errors instead of `warn` only.
-- [ ] Sync version: code says 1.4 (L28), header says v1.3, README stops at v1.3.
+- [x] Sync version: code, header comment and README now all say 2.0 (done in the version-bump commit).
 - [ ] Fix README: it says "one note image for all 4 lanes" but per-lane taps, hold heads and pressed receptors now exist.
 - [ ] Background dim does nothing for images (L311-315): add a black overlay frame tied to the slider. *(needs a quick in-game look)*
 - [ ] Honor per-chart `chart.offsetMs` in `buildGameSong` (L377). *(needs a quick in-game look)*

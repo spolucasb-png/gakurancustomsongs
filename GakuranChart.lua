@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v1.3
+    GakuranChart v2.0
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "1.4"
+local VERSION = "2.0"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
