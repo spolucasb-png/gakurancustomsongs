@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.17
+    GakuranChart v2.0.18
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.17"
+local VERSION = "2.0.18"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -595,9 +595,20 @@ end
 HK.wheelRev = 1
 do
     local c = findWheelController()
+    -- getgc(true) enumeration is non-deterministic: five identical scans in a
+    -- row returned 4, 4, 0, 4, 4 hits with nothing changed, so a single miss at
+    -- init is common (~2 in 10 reloads). Retry a few times, forced past the
+    -- rescan gate, before falling back to the overlay. Stop early if a newer
+    -- re-execution has taken over (generation bumped).
+    local tries = 0
+    while not c and tries < 3 and _G.GakuranChartGen == MYGEN do
+        tries = tries + 1
+        task.wait(0.25)
+        c = findWheelController(true)
+    end
     if c then
         HK.ensure("WheelMenu", c, "_applySongListMenu", HK.makeWheelListMenu, HK.wheelRev)
-    else
+    elseif _G.GakuranChartGen == MYGEN then
         warn("[GakuranChart] Wheel controller not found - difficulty picker falls back to overlay")
     end
     local wb = hookBase["WheelMenu"]
@@ -3061,8 +3072,50 @@ end
 -- this section): a Rayfield load/build error must not abort the loader and
 -- leave it half-initialised. The body below is intentionally NOT re-indented
 -- so the diff against the previous version stays reviewable.
+-- Rayfield:Notify runs every notification in its own task.spawn thread that
+-- sleeps through the whole animation (~5 s). A re-execution destroys the
+-- previous Rayfield GUI (cleanup + sweepRayfield) while those threads are still
+-- asleep; when one wakes, the notification's children are gone and it throws
+-- "Title/Icon is not a valid member of Frame ..." (one pair per notification
+-- still on screen, so N back-to-back reloads print N-1 pairs). Harmless to the
+-- new instance, but noisy. Fix: patch the Rayfield source IN MEMORY (the file
+-- on disk stays as downloaded) so the thread returns as soon as its frame is
+-- no longer parented. A destroyed GUI can only be noticed after a yield, so one
+-- check after every `task.wait(...)` statement inside Notify covers every line
+-- that could throw. Returns the source and the number of guards inserted.
+HK.rayfieldGuardCount = 0
+function HK.guardRayfieldNotify(src)
+    local s = src:find("function RayfieldLibrary:Notify(data)", 1, true)
+    if not s then return src, 0 end
+    -- the function ends at the first column-0 "end" (inner blocks are indented)
+    local e = src:find("\nend", s, true)
+    if not e then return src, 0 end
+    local body, n = src:sub(s, e):gsub("(\n[ \t]*task%.wait%b())",
+        "%1 if not newNotification.Parent then return end")
+    if n == 0 then return src, 0 end
+    return src:sub(1, s - 1) .. body .. src:sub(e + 1), n
+end
+
+-- Loads ui/Rayfield.lua with the guard applied. Any problem (anchors missing
+-- after a Rayfield update, patched chunk fails to compile) falls back to the
+-- untouched source: the guard is cosmetic and must never block the UI.
+function HK.loadRayfield()
+    local src = fn.readfile("ui/Rayfield.lua")
+    local okP, patched, n = pcall(HK.guardRayfieldNotify, src)
+    if okP and n > 0 then
+        local chunk = loadstring(patched)
+        if chunk then
+            HK.rayfieldGuardCount = n
+            return chunk()
+        end
+    end
+    HK.rayfieldGuardCount = 0
+    warn("[GakuranChart] Rayfield notification guard not applied (unexpected Rayfield source); reload errors may appear")
+    return loadstring(src)()
+end
+
 local function buildUI()
-Rayfield = loadstring(fn.readfile("ui/Rayfield.lua"))()
+Rayfield = HK.loadRayfield()
 
 -- Route notify() through Rayfield now that it exists. Errors linger longer.
 uiNotify = function(title, body, isError)
@@ -3634,6 +3687,7 @@ _G.GakuranChart = {
                 ledgerRecs = n(LG.ledger and LG.ledger.recs),
                 registryById = n(reg and rawget(reg, "_byId")),
                 wheelController = findWheelController() ~= nil,
+                rayfieldGuard = HK.rayfieldGuardCount or 0,
             },
             settings = {
                 skin = settings.skin,
