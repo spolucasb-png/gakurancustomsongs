@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.8
+    GakuranChart v2.0.11
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.8"
+local VERSION = "2.0.11"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -355,6 +355,62 @@ function HK.makeSongFilter(b)
     end
 end
 HK.ensure("ListPlayableSongInfosForHeld", service, "ListPlayableSongInfosForHeld", HK.makeSongFilter)
+
+-- Star badges ("★5.32") on single-difficulty custom songs. The wheel colours a
+-- row's difficulty badge through RhythmDifficulty.Key(text) -> tier, which is
+-- grey (Unrated) for anything it does not know. This wrapper maps a star
+-- label to the tier of the same density band as starRating (easy<2, medium<3,
+-- hard<4, extreme<5, insane above) and passes every other input straight
+-- through, so the game's own songs are untouched. Closes over its record
+-- only, like the other wrappers.
+function HK.makeDiffKey(b)
+    return function(s, ...)
+        if type(s) == "string" then
+            local n = tonumber(s:match("^★(%d+%.?%d*)$"))
+            if n then
+                return n < 2 and "easy" or n < 3 and "medium" or n < 4 and "hard"
+                    or n < 5 and "extreme" or "insane"
+            end
+        end
+        return b.under(s, ...)
+    end
+end
+local diffMod = gcFind(function(t)
+    return type(rawget(t, "Key")) == "function" and type(rawget(t, "Resolve")) == "function"
+        and type(rawget(t, "Tiers")) == "table"
+end)
+if diffMod then
+    HK.ensure("DiffKey", diffMod, "Key", HK.makeDiffKey)
+else
+    warn("[GakuranChart] RhythmDifficulty not found - star badges will be grey")
+end
+
+-- The wheel skins do not print the raw difficulty text: they call
+-- RhythmWheelKit.tier(text) and draw its .word, which is the tier WORD
+-- ("EXTREME") looked up from the Key above. For a star label we keep the tier
+-- colour / rank / ink and show the label itself ("★5.32") as the word. Every
+-- other input (all of the game's own songs) goes straight to the original.
+function HK.makeDiffTier(b)
+    return function(s, ...)
+        local r = b.under(s, ...)
+        if type(s) == "string" and type(r) == "table" and s:match("^★%d+%.?%d*$") then
+            local c = {}
+            for k, v in pairs(r) do c[k] = v end
+            c.word = s
+            return c
+        end
+        return r
+    end
+end
+local kitMod = gcFind(function(t)
+    return type(rawget(t, "tier")) == "function" and type(rawget(t, "textW")) == "function"
+        and type(rawget(t, "ink")) == "function"
+end)
+if kitMod then
+    HK.ensure("DiffTier", kitMod, "tier", HK.makeDiffTier)
+else
+    warn("[GakuranChart] RhythmWheelKit not found - star badges will read as tier words")
+end
 
 -- Difficulty-picker hook on service.StartPlay (every wheel row, search row and
 -- stage start goes through it). For one of OUR multi-difficulty parent songs the
@@ -893,6 +949,44 @@ local function sortDiffs(diffs)
     end)
 end
 
+-- Chart length in seconds: the converter's `duration` when present, else
+-- estimated from the last note end (older hand-made charts have no duration;
+-- without a fallback they would divide by 1 and read as 9.99 stars).
+local function chartSeconds(chart)
+    local dur = tonumber(chart.duration)
+    if dur and dur > 0 then return dur end
+    local notes = type(chart.charts) == "table" and chart.charts[chart.mode] or nil
+    local bpm = tonumber(chart.bpm)
+    if type(notes) == "table" and bpm and bpm > 0 then
+        local last = 0
+        for _, n in ipairs(notes) do
+            local e = (tonumber(n.b) or 0) + (tonumber(n.d) or 0)
+            if e > last then last = e end
+        end
+        if last > 0 then return last * 60 / bpm end
+    end
+    return 1
+end
+
+-- Decimal star estimate from note density, anchored so whole numbers match
+-- the tier-colour bands (easy<2, medium<4, hard<6.5, extreme<9 notes/s).
+-- Our own heuristic, shown beside difficulty names - NOT osu! star rating
+-- (which is computed by the osu! client and never stored in .osu files).
+local function starRating(chart)
+    local d = 0
+    pcall(function()
+        d = #chart.charts[chart.mode] / chartSeconds(chart)
+    end)
+    local s
+    if d < 2 then s = 0.5 + d * 0.75
+    elseif d < 4 then s = 2 + (d - 2) * 0.5
+    elseif d < 6.5 then s = 3 + (d - 4) * 0.4
+    elseif d < 9 then s = 4 + (d - 6.5) * 0.4
+    else s = 5 + (d - 9) * 0.3 end
+    if s > 9.99 then s = 9.99 end
+    return s
+end
+
 local function diffName(chart)
     local d = type(chart.difficulty) == "table" and chart.difficulty[chart.mode] or nil
     return type(d) == "string" and d ~= "" and d or "Custom"
@@ -906,6 +1000,12 @@ local function injectAllCharts()
     local function injectSingle(chart)
         local okB, song = pcall(buildGameSong, chart)
         if okB and song then
+            -- A single-difficulty custom song gets a star badge ("★5.32")
+            -- in the wheel row, like the game's own songs get their tier
+            -- badge; HK.makeDiffKey gives it the matching tier colour.
+            pcall(function()
+                song.difficulty = { [chart.mode] = ("★%.2f"):format(starRating(chart)) }
+            end)
             pcall(injectSong, song)
             count += 1
         end
@@ -1981,7 +2081,7 @@ function HK.restore()
     local base = _G.GakuranChartHookBase
     if type(base) ~= "table" or base.version ~= HOOK_BASE_VERSION then return true end
     local allGone = true
-    for _, name in ipairs({ "SubmitStats", "QueryJamSync", "FireStart", "ListPlayableSongInfosForHeld", "StartPlay", "WheelMenu" }) do
+    for _, name in ipairs({ "SubmitStats", "QueryJamSync", "FireStart", "ListPlayableSongInfosForHeld", "StartPlay", "WheelMenu", "DiffKey", "DiffTier" }) do
         local b = base[name]
         if type(b) == "table" and type(b.mod) == "table" and type(b.wrap) == "function" then
             local cur = b.mod[b.key]
@@ -2208,26 +2308,8 @@ local function fmtDuration(sec)
     return ("%d:%02d"):format(sec // 60, sec % 60)
 end
 
--- Decimal star estimate from note density, anchored so whole numbers match
--- the tier-colour bands (easy<2, medium<4, hard<6.5, extreme<9 notes/s).
--- Our own heuristic, shown beside difficulty names - NOT osu! star rating
--- (which is computed by the osu! client and never stored in .osu files).
-local function starRating(chart)
-    local d = 0
-    pcall(function()
-        local dur = tonumber(chart.duration)
-        if not dur or dur <= 0 then dur = 1 end
-        d = #chart.charts[chart.mode] / dur
-    end)
-    local s
-    if d < 2 then s = 0.5 + d * 0.75
-    elseif d < 4 then s = 2 + (d - 2) * 0.5
-    elseif d < 6.5 then s = 3 + (d - 4) * 0.4
-    elseif d < 9 then s = 4 + (d - 6.5) * 0.4
-    else s = 5 + (d - 9) * 0.3 end
-    if s > 9.99 then s = 9.99 end
-    return s
-end
+-- (starRating / chartSeconds live above diffName, next to injectAllCharts,
+-- because single-difficulty wheel rows need them at injection time.)
 
 -- Fields of the parent song object that describe ONE chart.
 local SWAP_FIELDS = {
@@ -2492,7 +2574,7 @@ end
 -- 5.96 Native wheel submenu page (multi-difficulty parent rows).
 -- Renders inside the game's own wheel through its slot primitives, the way
 -- _applyGuitarVariantSubmenu does: Back nav slot, one button per difficulty
--- (tier-coloured strip, decimal star estimate beside the name), remaining
+-- (tier-coloured strip, star-rating chip on the right), remaining
 -- slots cleared. Picks run pickDifficulty, then close the wheel and return
 -- "play" (native flash + select sound). Registered per run on the shared
 -- WheelMenu record (like b.handler); the stable router wrapper only reads
@@ -2515,10 +2597,16 @@ function HK.renderWheelSubmenu(controller, pid)
         local dd = diffs[i]
         local chart = dd.chart
         local name = string.upper(diffName(chart))
-        local title = name .. "  ★" .. ("%.2f"):format(starRating(chart))
+        -- The rating is the slot's difficulty CHIP: the wheel skins draw
+        -- RhythmWheelKit.tier(meta.diff), and HK.makeDiffTier turns a star
+        -- label into a tier-coloured "★5.32" chip, the same badge the
+        -- single-difficulty rows get. The title is just the difficulty name
+        -- (the native slot label end-truncates, so only the name can clip).
+        local stars = ("★%.2f"):format(starRating(chart))
+        local title = name
         local sub = ("%d notes  |  %s"):format(#chart.charts[chart.mode], fmtDuration(chart.duration))
         local song = parent.song
-        local art = { artist = song.artist, coverId = song.coverId, diff = name,
+        local art = { artist = song.artist, coverId = song.coverId, diff = stars,
             length = fmtDuration(chart.duration), playMode = parent.mode }
         controller:_setSlot(1 + i, title, function()
             local okB, resB = pcall(pickDifficulty, parent, dd)

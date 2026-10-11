@@ -1,46 +1,40 @@
 # Handoff (for the next chat session)
 
-State at commit time: `main` was at `109064e` (v2.0.8) before this commit.
+## State
+`GakuranChart.lua` is the single loader again (v2.0.11). The temporary copies
+`GakuranChart_v2.0.9.lua` / `GakuranChart_v2.0.10.lua` were folded into it and
+removed (they stay in git history). The earlier file lock on `GakuranChart.lua`
+is gone.
 
-## Why there are two loader files
-`GakuranChart.lua` could not be overwritten (Windows EPERM on rename; something
-had the file locked). The fix was made in a copy instead:
+Recent loader changes (see `git log` for the live-test notes of each):
+- v2.0.9: wheel submenu slot title star-first (superseded by 2.0.11).
+- v2.0.10: single-difficulty custom songs get a star label ("★5.32") as their
+  wheel difficulty. Two HookBase wrappers: `DiffKey` (RhythmDifficulty.Key maps a
+  star label to its tier colour) and `DiffTier` (RhythmWheelKit.tier returns the
+  label itself as the chip word; the skins draw tier(diff).word, not the raw
+  text). User confirmed the badges look right in the wheel list.
+- v2.0.11: multi-difficulty submenu slots use the same chip (`art.diff` = star
+  label); the title is just the difficulty name. Verified by rendering the real
+  submenu page through the live skin (chip text and colours correct); NOT yet
+  eyeballed by the user in the open wheel.
 
-- `GakuranChart_v2.0.9.lua` = `GakuranChart.lua` (v2.0.8) + the changes below.
-- Next step: confirm `GakuranChart_v2.0.9.lua` works, then replace
-  `GakuranChart.lua` with it (`Copy-Item -Force`) and delete the copy. If the
-  lock is still there, find what holds the file (editor, other session, AV).
+## Workflow
+- Loader runs from the executor workspace
+  `C:\Users\Administrator\AppData\Local\Madium\Workspace` (copy the repo file
+  there, then `run_executor_file`). `_G.GakuranChart` holds the API
+  (`openPicker`, `pickerStatus`, `svStatus`, `visStatus`, `list`, `setSkin`...).
+- The wheel only renders while an instrument is held. To test a submenu page
+  without it, call `_G.GakuranChartHookBase.WheelMenu.renderMenu(controller, "me_u")`
+  with the controller found via getgc (table with `_slots` and `_menuPage`) and read
+  `controller._slots[i].Data / .V.DiffText.Text`.
 
-## Changes in v2.0.9 (only these)
-1. `HK.renderWheelSubmenu` (~line 2518): difficulty slot title is now
-   `★5.32  NAME` instead of `NAME  ★5.32`. The engine's slot label end-truncates
-   with "...", so a long difficulty name used to hide the star. With the star
-   first only the name can be clipped.
-2. VERSION / header comment bumped to 2.0.9.
-
-## NOT verified
-- The change has not been seen on screen. The wheel only renders while an
-  instrument is held; `G.openPicker("me_u")` reported open but no label existed.
-  To test: hold a keyboard, open the wheel, open `me_u` (has the long
-  "UNPREDICTABLE'S ADVANCED"), check the star is visible.
-- Name-first with a scrolling marquee, or a name shortened to a measured width,
-  was the user's other idea (e.g. `i love u ★5.32`). It needs the engine slot
-  label measured live with the wheel open (TextService:GetTextSize vs
-  AbsoluteSize). Do it if star-first is not liked.
-- Still open from v2.0.7: no select-flash colour seen by the user; physical
-  wheel click, full pick->play->stop cycle, and overlay/submenu exclusion with a
-  real overlay were never verified. User said "keep it 2-4k for now" and that
-  the submenu styling is fine, so do not restyle.
-- Known: the character can stay stuck in keyboard mode after a stage or forced
-  chart play (separate fix pending).
-
-## Workflow notes
-- Loader runs from the executor workspace: `loadstring(readfile("GakuranChart.lua"))`
-  (copy the repo file there first; `_G.GakuranChart` holds the API, e.g.
-  `openPicker`, `pickerStatus`, `svStatus`, `visStatus`).
-- Check `git log` for history; commit messages list what was verified live.
-- Leftover test junk in the executor workspace: skin packs
-  `GakuranCharts/Skins/zz_vis_*` and `GakuranChart_skinvisual_candidate.lua`
-  (safe to delete; they show up in the skin dropdown).
-- Skin visuals (hold head, pressed receptor, per-lane taps) are already done
-  (`3b4358f`, `d35b546`).
+## Still open / not verified
+- Submenu chip not yet seen on screen; pill width with long names unchecked.
+- Select-flash colour, physical wheel click, full pick->play->stop cycle on the
+  current build, overlay/submenu exclusion with a real overlay.
+- Character can stay stuck in keyboard mode after a stage or forced chart play.
+- Real stage play with the SV-spawn / skin-visual passes (never forced live).
+- Skin visuals (hold head, pressed receptor, per-lane taps) and SV-aware spawn are
+  done (`3b4358f`, `d35b546`, `578c2d8`).
+- Leftover test junk in the executor workspace: `GakuranCharts/Skins/zz_vis_*` (if
+  present) and the many `GakuranChart_*_candidate.lua` files (safe to delete).
