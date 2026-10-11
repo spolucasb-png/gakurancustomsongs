@@ -26,7 +26,7 @@ Plan / progress (update after every step):
 - [x] Back up the deployed v2.0.16 loader, `python tools/deploy.py --live` (v2.0.18). Done.
 - [x] Read-only research in the live client (client 14512): the engine is
       lane-count-generic, so real 4K+ looks feasible. Findings below. NOT tested.
-- [ ] Probe with a throwaway Luau script (no loader change) whether a >4-lane
+- [ ] (IN PROGRESS, started 2026-10-11, user approved the whole plan) Probe with a throwaway Luau script (no loader change) whether a >4-lane
       session starts and plays: wrap `RhythmChartUtil.resolvePlayable`, set
       `playable.lanes = 7` + a key map, `StartPlay` a 7K chart, watch for errors.
 - [ ] Loader: `lanes` + `keyMapOverride` on our song, a theme for N lanes, hint
@@ -35,6 +35,13 @@ Plan / progress (update after every step):
       in Settings.json. Later, optionally, the game's own settings page (see below).
 - [ ] Converter: stop folding when the loader supports the lane count (`--no-fold`
       semantics stay; add the real column count to the chart, `sourceKeys` exists).
+
+### Work log (newest last; keep appending)
+- 2026-10-11: user approved starting the plan. Step 1 = throwaway probe, scripts live in
+  `C:\Users\Administrator\Desktop\Referencesandmods\_scratch_convert\probe4k_*.lua`
+  (outside the repo, run with `run_executor_file` or `execute_luau`). The probe only
+  touches module tables / a synthetic song guarded in `GakuranChartHookBase.ids`, and
+  must restore every wrapper it installs. Results get appended here.
 
 ### Findings (live decompile, 2026-10-11) - 4K+ is an engine-supported shape
 - `RhythmChartUtil.getLaneCount(mode)` is hard-coded (Guitar/RhythmGuitar 2, else 4)
