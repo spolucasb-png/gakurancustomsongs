@@ -15,6 +15,22 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
+### Current task (session 7): source game icons beside the wheel star rating
+Goal (user, 2026-10-11): icons showing which game a song comes from (customs
+vs native today, other source engines later), everywhere feasible, as true
+image icons. User accepts the wheel-skin-injection update-fragility risk.
+- Design agreed: `source` field in chart JSON (converter `--source`, default
+  `osu`; backfill 30 workspace charts: 29 `osu`, `test_end` `local`);
+  loader carries `song.gakuranSource` (SWAP_FIELDS) + `[osu!]`-style text tag
+  on wheel-row titles now; true ImageLabels in overlay/Rayfield/submenu text
+  where we own the GUI; main-wheel image-beside-badge needs live wheel-skin
+  research (fragile, queued as a live step).
+- Plan: converter edit → backfill → loader v2.0.22 (readChart default,
+  buildGameSong source+tag, SWAP_FIELDS, submenu/overlay/Rayfield tags, icon
+  asset map with graceful missing-file fallback) → check.py → candidate →
+  live-verify (30/30 load, tags on screen, no Scores.json regrowth) → deploy.
+- Star-badge DiffTier-nil probe (session 6) still queued alongside.
+
 ### Session 5 (2026-10-11): stage keyboard guard (v2.0.21), chart import answer
 - [x] User bug: Space stands you up from the REAL stage keyboard. Cause (live-verified): seated, Space is
       Roblox's jump and a jump stands you up; the engine only sinks Space while a session runs AND the

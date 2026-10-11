@@ -254,6 +254,26 @@ parent rows and submenu (A2/A3) and is untouched.
 - [ ] Retry hotkey and Stop keybind.
 - [ ] Remember per-chart offset automatically; optional tap-to-calibrate.
 
+### 10. Source game icons (customs vs native now, other engines later) — IN PROGRESS (session 7)
+- Chart JSON gains additive `"source"` (converter `--source`, default `"osu"`;
+  backfilled: 29 workspace charts `osu`, `test_end` `local`). `formatVersion`
+  stays 1; `check.py` needs no change (syntax-only).
+- Loader v2.0.22: `readChart` defaults missing/invalid source to `"unknown"`;
+  `buildGameSong` sets `song.gakuranSource` (added to `SWAP_FIELDS`) and
+  prefixes wheel-row titles (`[osu!]`, `[local]`, `[custom]` fallback) — title
+  prefix touches game wheel/search rows only (Rayfield uses `chart.title`,
+  submenu uses difficulty names). `★x.xx` difficulty strings untouched so the
+  `DiffKey`/`DiffTier` hooks keep matching.
+- True `ImageLabel` icons where we own the GUI (overlay rows, Rayfield);
+  native submenu slots get a source tag in title/sub (their `art` table goes
+  to the game's `_setSlot`). Icon asset map (`Assets/icons/<source>.png`)
+  with graceful fallback while PNGs don't exist yet.
+- Main-wheel image-beside-badge needs live wheel-skin research (user accepted
+  the update-fragility risk): find the row frame beside `DiffText`, add an
+  `ImageLabel`, guard everything with pcall. Queued as a live step.
+- Live gate before deploy: 30/30 load, tags visible on screen, hooks still
+  ours, no `Scores.json` regrowth, re-exec zero growth.
+
 ## Later / future add-ons
 
 ### Multi-difficulty support (requested) -> moved to "Current focus" above
