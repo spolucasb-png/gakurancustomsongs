@@ -15,6 +15,46 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
+### Open issue (investigated, NOT fixed): hit flash / hit ring orientation
+User report (2026-10-11 15:51): the NoteHitFlash does not spawn oriented per
+lane like the receptor arrows. Findings from real `view:PlayHitEffect(lane)`
+calls on the live client (14512, AmbieArrowsFFR skin, loader v2.0.28):
+- Engine: `RhythmView:PlayHitEffect(lane)` (ReplicatedStorage.Shared.Services.
+  RhythmService.RhythmView, ~line 2113) takes a flash from `view._flashPool` and
+  a ring from `view._ringPool` (8 reusable frames each, `HitFlashTemplate` /
+  `HitRingTemplate`, parked in `OffscreenPool`). It sets Position, Size, colour
+  and transparency and orients BOTH only via `Rotation = RhythmNoteSprites.
+  GetRotation(spriteShape, laneCount, lane)`. Both pools carry the base note
+  image (the Up arrow). Our skin shapes register Rotation 0 (per-lane art
+  instead), so the engine's orientation does nothing for us.
+- Flash: only fixed by the per-frame repaint in `visApplyFrameInner` (lane
+  guessed from Position.X via `view._laneXs`). Measured: at the instant of spawn
+  the flash shows the base image, or the PREVIOUS lane's art, because pool frames
+  are recycled with whatever image they last had (a lane-4 flash spawned with
+  lane 1's art). It is correct after the next Heartbeat. Whether the loader's
+  persistent RenderStepped handler lands before the first rendered frame in a
+  real play is NOT verified (the loader comment says it fires after the engine's
+  handlers; my probe waking from RenderStepped:Wait ran before it).
+- Ring: never repainted. `HitRingTemplate` stays on the base Up image on every
+  lane, at spawn and later (lanes 1-4 all the same hash). ROADMAP already lists
+  flash/ring matching as deferred; v2.0.28 only did the flash.
+- Latent: the guard `(ss.hasHoldHead or ss.hasPressed)` at the top of
+  `visApplyFrameInner` skips the whole function, flash repaint included, for a
+  skin with per-lane taps but neither hold-head nor pressed art. Not this skin
+  (hasPressed is true). Shards use a separate image and are not affected.
+- Proposed fix (not applied, needs the user's go-ahead for the .lua): wrap
+  `view.PlayHitEffect` per view so the lane is KNOWN: after the original call,
+  immediately paint the acquired flash AND ring with that lane's tap art (same
+  tapImgs fallback as notes) instead of inferring the lane a frame later; keep
+  the per-frame repaint as a fallback; add `hasTapVariants` to the guard; undo
+  on teardown. Verify with real spawned effects, asserting the image at the
+  spawn instant (same thread, before any frame) for flash AND ring on lanes 1-4.
+- Side finding, unresolved, seen on the v2.0.17 candidate (~10:05) and NOT
+  rechecked on v2.0.28: two back-to-back executor re-runs left `WheelMenu=
+  displaced`, wheelController=false and 7/8 hooks (reproduced twice); the same
+  stress on v2.0.16 stayed 8/8, and a single re-run on the candidate was fine.
+  Re-test on the current loader before relying on rapid re-execution.
+
 ### Current task (session 7): source game icons beside the wheel star rating
 Goal (user, 2026-10-11): icons showing which game a song comes from (customs
 vs native today, other source engines later), everywhere feasible, as true
