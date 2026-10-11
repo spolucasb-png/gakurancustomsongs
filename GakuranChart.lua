@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.3
+    GakuranChart v2.0.7
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.3"
+local VERSION = "2.0.7"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -248,15 +248,33 @@ function HK.chainContains(top, target, depth, seen)
     return false
 end
 
--- Install (or re-use) our stable wrapper for mod[key].
-function HK.ensure(name, mod, key, makeWrap)
+-- Install (or re-use) our stable wrapper for mod[key]. `rev` (optional) is
+-- the wrapper-BODY revision. The execution that first creates a record owns
+-- its wrapper body for the life of the client, so an edited body would never
+-- go live on re-execution. When the stored rev differs, the body is rebuilt in
+-- place, and only while our own wrapper is what the slot holds: still ONE
+-- wrapper (never stacked), same b.under, every record field kept. Beneath a
+-- foreign wrapper it is left alone - that chain is not ours to rewrite.
+function HK.ensure(name, mod, key, makeWrap, rev)
     local b = hookBase[name]
     if type(b) ~= "table" or b.mod ~= mod or b.key ~= key
         or type(b.orig) ~= "function" or type(b.wrap) ~= "function" then
         local orig = HK.unwrapLegacy(mod[key])
-        b = { mod = mod, key = key, orig = orig, under = orig }
+        b = { mod = mod, key = key, orig = orig, under = orig, rev = rev }
         b.wrap = makeWrap(b)
         hookBase[name] = b
+    elseif rev ~= nil and b.rev ~= rev then
+        local slot = mod[key]
+        if slot == b.wrap then
+            b.wrap = makeWrap(b)
+            mod[key] = b.wrap
+            b.rev = rev
+        elseif not HK.chainContains(slot, b.wrap) then
+            b.wrap = makeWrap(b)   -- slot no longer holds us; reinstalled below
+            b.rev = rev
+        else
+            warn("[GakuranChart] " .. tostring(name) .. " wrapper is beneath a foreign wrapper; keeping its existing body (rev " .. tostring(b.rev) .. ")")
+        end
     end
     local cur = mod[key]
     if cur == b.wrap or HK.chainContains(cur, b.wrap) then
@@ -436,6 +454,7 @@ function HK.makeWheelListMenu(b)
             local okR, did = pcall(render, self, pend)
             if okR and did == true then
                 if okT then b.pendingToken = tok end
+                b.renderCount = (b.renderCount or 0) + 1
                 return
             end
         end
@@ -443,10 +462,14 @@ function HK.makeWheelListMenu(b)
         return b.under(self, ...)
     end
 end
+-- Wrapper-body revision for the WheelMenu hook: bump whenever
+-- HK.makeWheelListMenu changes, or a client that already holds a record keeps
+-- running the OLD body (rev 1 = first body that counts renders).
+HK.wheelRev = 1
 do
     local c = findWheelController()
     if c then
-        HK.ensure("WheelMenu", c, "_applySongListMenu", HK.makeWheelListMenu)
+        HK.ensure("WheelMenu", c, "_applySongListMenu", HK.makeWheelListMenu, HK.wheelRev)
     else
         warn("[GakuranChart] Wheel controller not found - difficulty picker falls back to overlay")
     end
@@ -460,7 +483,7 @@ end
 local function armWheelMenu()
     findWheelController(true)
     if wheelCtl then
-        HK.ensure("WheelMenu", wheelCtl, "_applySongListMenu", HK.makeWheelListMenu)
+        HK.ensure("WheelMenu", wheelCtl, "_applySongListMenu", HK.makeWheelListMenu, HK.wheelRev)
     end
     local wb = hookBase["WheelMenu"]
     if type(wb) == "table" then
@@ -819,10 +842,11 @@ end
 -- equipped. injectSong previously only ran when a chart was PLAYED,
 -- so the wheel never listed anything else - inject them all instead.
 -- Charts that share a songId (written by tools/osu2gakuran.py) become ONE
--- wheel row: the parent song, with the difficulties inside it (never as
--- registry rows). Clicking the row opens the difficulty picker (StartPlay
--- hook, section 5.95). Charts without a songId, and songs with a single chart,
--- stay plain rows exactly as before.
+-- wheel row: the parent song, with the difficulties inside it (a Rayfield
+-- play still registers the picked difficulty by id for the session, but it
+-- never gets its own wheel row). Clicking the row opens the difficulty
+-- picker (StartPlay hook, section 5.95). Charts without a songId, and songs
+-- with a single chart, stay plain rows exactly as before.
 local function chartDensity(c)
     local dur = tonumber(c.duration)
     if not dur or dur <= 0 then dur = 1 end
@@ -1846,6 +1870,12 @@ local function destroyPicker()
         pcall(function() pickerGui:Destroy() end)
         pickerGui = nil
     end
+    -- sweep by name: catches overlays left by older runs (different upvalue)
+    pcall(function()
+        local pg = player:FindFirstChildOfClass("PlayerGui")
+        local ov = pg and pg:FindFirstChild("GakuranChartDifficulty")
+        if ov then ov:Destroy() end
+    end)
 end
 
 local function isOurSessionPlaying()
@@ -2182,7 +2212,8 @@ local SWAP_FIELDS = {
     "startAt", "offsetMs", "approach", "charts", "soundIds", "difficulty", "coverId",
 }
 
-local function pickDifficultyInner(parent, d)
+local function pickDifficultyInner(parent, d, state)
+    state = state or {}
     local chart = d.chart
     local okI, busy = pcall(function() return service:IsPlaying() end)
     if okI and busy then
@@ -2194,8 +2225,9 @@ local function pickDifficultyInner(parent, d)
     local okA, attrErr = saveAndSetAttributes(chart.mode)
     if not okA then
         notify("Character error", attrErr, true)
-        return
+        return false
     end
+    state.attrsSet = true   -- wrapper restores on a throw before StartPlay succeeds
     local fresh, err = buildGameSong(chart)
     if not fresh then
         restoreAttributes()
@@ -2227,6 +2259,7 @@ local function pickDifficultyInner(parent, d)
         notify("Play failed", tostring(errP), true)
         return false
     end
+    state.started = true   -- from here the play owns the attributes (restored at stop)
     -- Success: drop the submenu state and close the wheel (mirrors the
     -- guitar slots, which StartPlay then Close). No-ops when the wheel is
     -- already closed (overlay/API starts) or unreachable.
@@ -2257,9 +2290,16 @@ local picking = false
 local function pickDifficulty(parent, d)
     if picking then return false end
     picking = true
-    local ok, res = pcall(pickDifficultyInner, parent, d)
+    local state = { attrsSet = false, started = false }
+    local ok, res = pcall(pickDifficultyInner, parent, d, state)
     picking = false
-    if not ok then error(res, 0) end
+    if not ok then
+        -- A throw before StartPlay succeeded would leave PlayingInstrument /
+        -- ItemEquipped overridden with no play to restore them. After a
+        -- successful start the play owns them, so leave them alone.
+        if state.attrsSet and not state.started then restoreAttributes() end
+        error(res, 0)
+    end
     return res
 end
 
@@ -2407,8 +2447,18 @@ local function onStartPlay(songId)
             shown = okW and res == true
         end
         if not shown then
+            -- mutual exclusion: an open wheel goes back to its list page
+            -- first, so the overlay never stands beside our submenu
             local wb = hookBase["WheelMenu"]
-            if type(wb) == "table" then wb.pendingSongId = nil end
+            if type(wb) == "table" then wb.pendingSongId = nil; wb.pendingToken = nil end
+            local fc = findWheelController()
+            if fc then
+                local okFS, fst = pcall(function() return fc._uiState end)
+                local okFO, fop = pcall(function() return fc._isOpen end)
+                if okFS and fst == "Open" and okFO and fop == true then
+                    pcall(function() fc:_transitionPage(function() end) end)
+                end
+            end
             local okO, errO = pcall(openPicker, parent)
             if not okO then notify("Picker error", tostring(errO), true) end
         end
@@ -2473,16 +2523,29 @@ function HK.openWheelSubmenu(parent)
     wb.pendingSongId = parent.id
     wb.pendingAt = os.time()
     wb.pendingToken = nil
+    local before = wb.renderCount or 0
+    local function rendered()
+        return (wb.renderCount or 0) > before
+    end
+    local function fail()
+        wb.pendingSongId = nil
+        wb.pendingToken = nil
+        return false
+    end
     for _ = 1, 30 do
         local okS, st = pcall(function() return c._uiState end)
         if okS and st == "Open" then
             local okT = pcall(function() c:_transitionPage(function() end) end)
             if not okT then
-                wb.pendingSongId = nil
-                wb.pendingToken = nil
-                return false
+                return fail()
             end
-            return true
+            -- the apply runs after the transition tween: wait for our render,
+            -- not just a clean call. falls through to overlay on timeout
+            for _ = 1, 30 do
+                if rendered() then pcall(destroyPicker) return true end
+                task.wait(0.05)
+            end
+            return fail()
         end
         if okS and st == "Closed" then break end
         task.wait(0.05)
@@ -2491,17 +2554,16 @@ function HK.openWheelSubmenu(parent)
     -- it timed out in a transitional state, where Open() would silently no-op
     local okS2, st2 = pcall(function() return c._uiState end)
     if not (okS2 and st2 == "Closed") then
-        wb.pendingSongId = nil
-        wb.pendingToken = nil
-        return false
+        return fail()
     end
     if pcall(function() c:Open() end) then
         local okI, isOpen = pcall(function() return c._isOpen end)
-        if okI and isOpen == true then return true end
+        -- Open() renders synchronously, so a render must already be counted;
+        -- _isOpen alone can lie (split-brain after programmatic opens).
+        -- A stale overlay would otherwise stand beside the submenu.
+        if okI and isOpen == true and rendered() then pcall(destroyPicker) return true end
     end
-    wb.pendingSongId = nil
-    wb.pendingToken = nil
-    return false
+    return fail()
 end
 
 HK.pickerHandler = onStartPlay
@@ -2921,6 +2983,17 @@ _G.GakuranChart = {
             local okW, res = pcall(HK.openWheelSubmenu, p)
             if okW and res == true then return true end
         end
+        -- same mutual exclusion as the trigger path above
+        local wb = hookBase["WheelMenu"]
+        if type(wb) == "table" then wb.pendingSongId = nil; wb.pendingToken = nil end
+        local fc = findWheelController()
+        if fc then
+            local okFS, fst = pcall(function() return fc._uiState end)
+            local okFO, fop = pcall(function() return fc._isOpen end)
+            if okFS and fst == "Open" and okFO and fop == true then
+                pcall(function() fc:_transitionPage(function() end) end)
+            end
+        end
         openPicker(p)
         return true
     end,
@@ -2933,7 +3006,7 @@ _G.GakuranChart = {
     end,
     closePicker = function()
         local wb = hookBase["WheelMenu"]
-        if type(wb) == "table" then wb.pendingSongId = nil end
+        if type(wb) == "table" then wb.pendingSongId = nil; wb.pendingToken = nil end
         local c = findWheelController()
         if c then
             local okS, st = pcall(function() return c._uiState end)
