@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.7
+    GakuranChart v2.0.8
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.7"
+local VERSION = "2.0.8"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -663,35 +663,58 @@ end
 ----------------------------------------------------------------
 -- 5. Play / Stop
 ----------------------------------------------------------------
+-- Instrument-mode override on the character (client-side only; the game
+-- itself never writes PlayingInstrument, the server owns it). Tracks what we
+-- captured and what we WROTE so the undo can be exact:
+--   { char, saved = {PlayingInstrument, ItemEquipped},
+--     wrote = {PlayingInstrument, ItemEquipped}, at = os.clock() }
 local savedAttributes = nil
 
 local function saveAndSetAttributes(mode)
     local char = player.Character
     if not char then return false, "No character" end
-    if not savedAttributes then
+    -- Keep the ORIGINAL values across back-to-back plays on one character; a
+    -- respawn starts a fresh capture (never carry values between characters).
+    if not savedAttributes or savedAttributes.char ~= char then
         savedAttributes = {
-            PlayingInstrument = char:GetAttribute("PlayingInstrument"),
-            ItemEquipped = char:GetAttribute("ItemEquipped"),
+            char = char,
+            saved = {
+                PlayingInstrument = char:GetAttribute("PlayingInstrument"),
+                ItemEquipped = char:GetAttribute("ItemEquipped"),
+            },
         }
     end
-    char:SetAttribute("PlayingInstrument", mode)
     -- Guitar/Bass require ItemEquipped == mode; Keyboard/Drums require nil
-    if mode == "Guitar" or mode == "Bass" then
-        char:SetAttribute("ItemEquipped", mode)
-    else
-        char:SetAttribute("ItemEquipped", nil)
-    end
+    local wrote = {
+        PlayingInstrument = mode,
+        ItemEquipped = (mode == "Guitar" or mode == "Bass") and mode or nil,
+    }
+    savedAttributes.wrote = wrote
+    savedAttributes.at = os.clock()
+    char:SetAttribute("PlayingInstrument", wrote.PlayingInstrument)
+    char:SetAttribute("ItemEquipped", wrote.ItemEquipped)
     return true
 end
 
+-- Undo ONLY what is still our override. The server owns these attributes: if
+-- it changed one since we wrote it (the player stood up from a station
+-- mid-play and the server cleared PlayingInstrument), writing our captured
+-- value back would resurrect a stale "Keyboard" that nothing ever clears
+-- again (the character then stays in keyboard animation/controls off-chart).
+-- A respawned character carries none of our writes, so it is left alone.
 local function restoreAttributes()
-    if not savedAttributes then return end
-    local char = player.Character
-    if char then
-        pcall(function() char:SetAttribute("PlayingInstrument", savedAttributes.PlayingInstrument) end)
-        pcall(function() char:SetAttribute("ItemEquipped", savedAttributes.ItemEquipped) end)
-    end
+    local st = savedAttributes
+    if not st then return end
     savedAttributes = nil
+    local char = player.Character
+    if not char or char ~= st.char then return end
+    for _, k in ipairs({ "PlayingInstrument", "ItemEquipped" }) do
+        pcall(function()
+            if char:GetAttribute(k) == st.wrote[k] then
+                char:SetAttribute(k, st.saved[k])
+            end
+        end)
+    end
 end
 
 local function buildGameSong(chart)
@@ -2629,6 +2652,15 @@ task.spawn(function()
             stopRequested = false
         elseif playing then
             stopRequested = false
+        elseif savedAttributes and not surfaceStillUp()
+            and os.clock() - (savedAttributes.at or 0) > 30 then
+            -- Leak sweeper: an override with no play, results screen or
+            -- pending start behind it (a throw between saveAndSetAttributes
+            -- and StartPlay, a missed play->stop transition) would leave the
+            -- character in instrument mode. 30 s outlasts any legitimate
+            -- start (old-view teardown wait + audio-length pre-cache), and
+            -- restoreAttributes only undoes what is still ours.
+            restoreAttributes()
         end
         wasPlaying = playing
     end
