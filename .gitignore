@@ -1,2 +1,28 @@
 __pycache__/
 *.pyc
+
+# Beatmap archives and the media extracted from them: copyrighted, large, and
+# reproducible from the source maps. They stay on disk, they just aren't tracked.
+*.osz
+*.osu
+*.mp3
+*.ogg
+*.zip
+osz_extract/
+
+# Prebuilt binary that came with the FunkyChart reference (FunkyChart.lua, the
+# part that is actually useful to read, stays tracked).
+*.exe
+
+# osu! skin SOURCE. tools/osu2skin.py converts it into
+# GakuranCharts/Skins/<pack>/ and only the converted pack belongs in git.
+# (Bracket-free pattern on purpose: [ ] are character classes in gitignore.)
+tools/*NC Skin*/
+
+# Local play data the loader writes.
+GakuranCharts/Settings.json
+GakuranCharts/Scores.json
+
+# Stale v1.0 loader kept on disk "just in case" - git history holds every
+# version of GakuranChart.lua already, so it does not need tracking too.
+GakuranChart - Copy just in case.lua
