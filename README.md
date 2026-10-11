@@ -146,6 +146,34 @@ python tools/osu2skin.py "C:/Users/<you>/AppData/Local/osu!/Skins/MySkin" ^
   e.g. `3560:2:0:1:60:`) are parsed correctly — 865 holds restored in SOUND
   ARCHITECT.
 
+## Stability (v2.0)
+
+Re-executing the loader or a failed UI build no longer leaves anything behind.
+All three mechanisms below were verified live (hook/registry state identical
+across repeated executions).
+
+- **Hook ownership.** The safety-net hooks on `SubmitStats`, `QueryJamSync` and
+  `FireStart` use one versioned shared base (`_G.GakuranChartHookBase`, v2) with a
+  single stable wrapper per hook, so re-executing never wraps the wrappers.
+  Genuine originals are recovered by peeling wrappers left by older loader
+  versions. Cleanup restores a slot only while our wrapper is still installed,
+  and stays out of the chain if another script wrapped it afterwards.
+- **Registry ledger.** `_G.GakuranChartLedger` (v1) records the song objects we
+  inject and any genuine entries they displaced. Cleanup removes only what the
+  ledger says we own and puts displaced genuine entries back by identity, never
+  by id match. Leftovers from pre-ledger versions are claimed only for managed ids
+  whose sounds are all `rbxasset://`. The song wheel is de-duplicated without
+  touching genuine entries.
+- **UI-failure rollback.** The Rayfield build runs inside `buildUI()` + `xpcall`.
+  If it errors, the loader logs `UI initialization failed - rolling the loader
+  back`, retires that instance, runs the cleanup that was registered before the
+  UI was built, sweeps any Rayfield windows, and defers guard/registry teardown
+  while a custom session is still shutting down. There is no headless fallback;
+  fix the error and execute again.
+
+Custom song ids are still neutralized locally with early returns, so nothing
+custom is sent to the server.
+
 ## Files
 
 | Path | Purpose |

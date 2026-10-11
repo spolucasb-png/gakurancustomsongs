@@ -1,6 +1,7 @@
 # GakuranChart Roadmap
 
 Written 2026-10-10 from a static read of `GakuranChart.lua` (HEAD `578c2d8`).
+**Status:** items 2 and 3 are done and verified live in `bdd1402`; everything else below is still unverified and untouched.
 **Every bug below is "likely, please verify"**. Nothing here has been confirmed in-game yet.
 Items are ordered: safety first, then cheap wins, then features.
 
@@ -22,16 +23,19 @@ Items are ordered: safety first, then cheap wins, then features.
 - [ ] Verify each claimed bug in the code, starting with #2 and #3 below.
 - [ ] Leave the SV spawn-extension block (~L1092-1220) alone. It was verified live and the review only skimmed it.
 
-### 2. Stability: UI failure leaves a half-initialised loader (L1517, L1780)
-- [ ] Register `_G.GakuranChartCleanup` **before** the UI is built.
-- [ ] Wrap `loadstring(readfile("ui/Rayfield.lua"))()` in `pcall`.
-- [ ] If Rayfield fails, fall back to headless mode via `_G.GakuranChart`.
+### 2. Stability: UI failure leaves a half-initialised loader (L1517, L1780) — DONE (`bdd1402`)
+- [x] Register `_G.GakuranChartCleanup` **before** the UI is built.
+- [x] Wrap the Rayfield load/build in a protected call (`buildUI()` + `xpcall`).
+- [x] ~~Fall back to headless mode~~ Changed approach: on failure the loader **rolls back fully** instead (retire instance via generation bump, run pre-registered cleanup, `sweepRayfield`, deferred `HK.finish()` while a custom session tears down). Headless fallback was dropped.
+- Verified live (Test B, forced UI error in a temp copy): hook slots back to original, 0 guard ids, 0 persistentFrame conns, 0 windows, ledger 0; a normal re-exec afterwards recovered everything.
 - Why: if the UI errors, the `RenderStepped` connection, skin wrap and hooks stay live and the next run can't clean them up.
 
-### 3. Stability: safety-net hooks stack across re-executions (L143-167)
-- [ ] Store the original `SubmitStats`, `QueryJamSync`, `FireStart` in `_G` (same pattern as `_G.GakuranChartSkinBase`) and restore them in cleanup.
-- [ ] Cleanup should also remove injected songs from the registry and wheel.
-- Live test must cover: several re-executions, Stop, hooks not stacking, and custom ids still neutralized after a restore.
+### 3. Stability: safety-net hooks stack across re-executions (L143-167) — DONE (`bdd1402`)
+- [x] Keep the genuine `SubmitStats`, `QueryJamSync`, `FireStart` and restore them in cleanup. Implemented as a versioned shared base (`_G.GakuranChartHookBase` v2): one stable wrapper per hook, genuine originals recovered by peeling legacy-shaped wrappers, restore only while our wrapper is installed.
+- [x] Cleanup removes injected songs from the registry and wheel via an identity-based ledger (`_G.GakuranChartLedger` v1) that also restores displaced genuine entries.
+- Verified live: Test A (3 re-execs, zero growth), Test C (custom ids guarded, no network calls), Test D (play/stop/teardown, double cleanup clean).
+- Caveat: `SubmitStats`/`QueryJamSync` bogus-id probes matched the guards' return values but were not independently decisive; their wrappers share the verified structure.
+- Live test had to cover: several re-executions, Stop, hooks not stacking, and custom ids still neutralized after a restore.
 
 ### 4. Converter vs loader key-count mismatch
 - `osu2gakuran.py` clamps keys to 1-7; the loader drops lanes above 4 (above 2 for Guitar), so 5K/7K maps silently lose notes.
