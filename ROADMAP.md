@@ -276,6 +276,10 @@ parent rows and submenu (A2/A3) and is untouched.
 - [x] DONE + DEPLOYED v2.0.22 (live-verified on client 14512, see HANDOFF
   session 7; wheelRev 3). Not yet eyeballed on screen by the user; overlay
   branch + Rayfield labels still only init-clean.
+- [x] Icon placement fixes v2.0.23 (wheelRev 4): icons are Diff-frame children
+  (6px left of the badge — overlap gone, hover-follow structural), sweep on
+  both wrap paths (submenu shows 0 stale icons, list restores 8/8, 0 stacked).
+  Live-verified on client 14512; user eyeball still pending.
 
 ## Later / future add-ons
 

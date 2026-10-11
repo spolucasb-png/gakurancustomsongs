@@ -40,6 +40,14 @@ image icons. User accepts the wheel-skin-injection update-fragility risk.
   Assets/icons/. NOT live-verified: overlay fallback branch (hard to force;
   syntax-checked only), Rayfield labels (init-clean only — eyeball pending),
   on-screen look (user), 9th row on page 2, touch/gamepad.
+- [x] Icon fixes v2.0.23 (user screenshot: overlap, no hover-follow, stale
+  submenu icons). Root cause: Root-anchored icons vs the Diff badge frame +
+  add-only paint over reused slots. Fix: icons parented to the Diff frame
+  (6.8px measured gap, badge-nudge test 11.4px/11.4px follow), sweep on both
+  wrap paths + v1 migration, wheelRev 3→4. Verified through the real wrap:
+  list 8 icons, submenu 0, list again 8, 0 stacked. Note: a direct
+  renderMenu call bypasses the wrap (sweep never runs) — always test the
+  submenu through wb.wrap/pending, not renderMenu directly.
 - Star-badge DiffTier-nil probe (session 6) still queued alongside.
 - Star-badge DiffTier-nil probe (session 6) still queued alongside.
 

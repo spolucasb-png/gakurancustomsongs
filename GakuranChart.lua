@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.22
+    GakuranChart v2.0.23
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.22"
+local VERSION = "2.0.23"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -730,6 +730,9 @@ function HK.makeWheelListMenu(b)
             if okR and did == true then
                 if okT then b.pendingToken = tok end
                 b.renderCount = (b.renderCount or 0) + 1
+                -- submenu slots reuse the list page's frames: sweep any icons
+                -- the base page left behind (synchronous: render set slots now)
+                paintWheelSourceIcons(self, false)
                 return
             end
         end
@@ -742,9 +745,9 @@ function HK.makeWheelListMenu(b)
         -- returns and once more shortly after. pcall-guarded no-op on
         -- unfamiliar skins; never touches the return values.
         task.defer(function()
-            paintWheelSourceIcons(self)
+            paintWheelSourceIcons(self, true)
             task.wait(0.5)
-            paintWheelSourceIcons(self)
+            paintWheelSourceIcons(self, true)
         end)
         return table.unpack(res, 1, res.n)
     end
@@ -752,7 +755,7 @@ end
 -- Wrapper-body revision for the WheelMenu hook: bump whenever
 -- HK.makeWheelListMenu changes, or a client that already holds a record keeps
 -- running the OLD body (rev 1 = first body that counts renders).
-HK.wheelRev = 3
+HK.wheelRev = 4
 do
     local c = findWheelController()
     -- getgc(true) enumeration is non-deterministic: five identical scans in a
@@ -965,7 +968,7 @@ end
 -- open, so icons never outlive their row; the name check keeps one render
 -- pass from stacking. Runs on the base-render path only (our submenu slots
 -- carry untagged difficulty names, so they never match anyway).
-paintWheelSourceIcons = function(self)
+paintWheelSourceIcons = function(self, doAdd)
     local okS, slots = pcall(function() return self._slots end)
     if not (okS and type(slots) == "table") then return end
     for _, s in ipairs(slots) do
@@ -975,25 +978,39 @@ paintWheelSourceIcons = function(self)
             local src = lab:match("^%[osu!%]") and "osu"
                 or lab:match("^%[local%]") and "local"
                 or lab:match("^%[custom%]") and "unknown" or nil
-            if not src then return end
             local V = s.V
-            if type(V) ~= "table" then return end
-            local root, diff = V.Root, V.Diff
-            if typeof(root) ~= "Instance" or typeof(diff) ~= "Instance" then return end
-            if root:FindFirstChild("GakuranSrcIcon") then return end
-            -- right-anchored badge only; any other layout is left alone
-            local dp = diff.Position
-            if dp.X.Scale ~= 1 then return end
-            local img = Instance.new("ImageLabel")
-            img.Name = "GakuranSrcIcon"
-            img.AnchorPoint = Vector2.new(1, 0.5)
-            img.Position = UDim2.new(1, dp.X.Offset - 4, 0.5, 0)
-            img.Size = UDim2.fromOffset(16, 16)
-            img.BackgroundTransparency = 1
-            img.BorderSizePixel = 0
-            local iconAsset = sourceIconAsset(src)
-            if type(iconAsset) == "string" then img.Image = iconAsset end
-            img.Parent = root
+            local root = type(V) == "table" and V.Root or nil
+            local diff = type(V) == "table" and V.Diff or nil
+            local haveRoot = typeof(root) == "Instance"
+            local haveDiff = typeof(diff) == "Instance"
+            -- sweep first, every pass: a slot reused by another page (submenu,
+            -- search) must never keep our icon, and v1 Root-parented icons
+            -- migrate to the Diff frame below
+            if haveRoot then
+                local stale = root:FindFirstChild("GakuranSrcIcon")
+                if stale then stale:Destroy() end
+            end
+            if haveDiff then
+                local stale = diff:FindFirstChild("GakuranSrcIcon")
+                if stale and (not src or not doAdd) then stale:Destroy() end
+                if not src or not doAdd then return end
+                if diff:FindFirstChild("GakuranSrcIcon") then return end
+                -- right-anchored badge only; any other layout is left alone
+                local dp = diff.Position
+                if dp.X.Scale ~= 1 then return end
+                -- child of the badge itself: follows it through hover tweens,
+                -- and a fixed gap left of the frame can never overlap it
+                local img = Instance.new("ImageLabel")
+                img.Name = "GakuranSrcIcon"
+                img.AnchorPoint = Vector2.new(1, 0.5)
+                img.Position = UDim2.new(0, -6, 0.5, 0)
+                img.Size = UDim2.fromOffset(16, 16)
+                img.BackgroundTransparency = 1
+                img.BorderSizePixel = 0
+                local iconAsset = sourceIconAsset(src)
+                if type(iconAsset) == "string" then img.Image = iconAsset end
+                img.Parent = diff
+            end
         end)
     end
 end
