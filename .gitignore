@@ -19,6 +19,11 @@ osz_extract/
 # (Bracket-free pattern on purpose: [ ] are character classes in gitignore.)
 tools/*NC Skin*/
 
+# FunkyChart v1.23 reference tree (songs, skins, .qp/.sm packages): local-only
+# source material. Only FunkyChart.lua (already tracked) stays in git.
+FunkyChart_v1.23/*
+!FunkyChart_v1.23/FunkyChart.lua
+
 # Local play data the loader writes.
 GakuranCharts/Settings.json
 GakuranCharts/Scores.json

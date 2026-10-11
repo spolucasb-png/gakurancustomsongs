@@ -289,6 +289,24 @@ parent rows and submenu (A2/A3) and is untouched.
   skips armWheelMenu (renderMenu nil → base path) — test submenus via
   G.openPicker, not raw wrap calls.
 
+### 11. Multi-format charts + skins (Etterna, Quaver) — IN PROGRESS (session 8)
+- Converters: `tools/sm2gakuran.py` (.sm dance-single → chart JSON, beats =
+  (measure + row/rows)*4, holds `2→3`, rolls `4→3` as holds, mines skipped
+  with warning, `#OFFSET` s → offsetMs) and `tools/qua2gakuran.py` (.qp zip
+  → .qua set → chart JSON each, ms clock → beats via first BPM exactly like
+  the osu converter, EndTime holds, SliderVelocities → scrollChanges,
+  TimingPoints[1:] → animationBpmChanges). Shared code imported from
+  osu2gakuran (sanitize_id, tier_for, place_media, assign_ranks); same schema,
+  `source` = etterna/quaver; Keys4 needs no fold (5K+ folds like osu).
+- Skins: `tools/qua2skin.py` (4k/HitObjects per-lane taps via manifest.taps,
+  receptor-up/down, holdbody+holdend composite tail) and
+  `tools/etterna2skin.py` (single-arrow Noteskin: _Up tap/go/press + hold
+  body, no caps) importing the osu2skin PNG codec. Output to repo
+  GakuranCharts/Skins (converted packs, committable).
+- Loader v2.0.25: SOURCE_TAGS + `Assets/icons/{etterna,quaver}.png`
+  (make_source_icons COLORS). Live gate: all new charts load, spot-play one
+  .sm + one .qua (SV), both skins apply without vis errors.
+
 ## Later / future add-ons
 
 ### Multi-difficulty support (requested) -> moved to "Current focus" above

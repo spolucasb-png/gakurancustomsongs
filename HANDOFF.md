@@ -57,6 +57,23 @@ image icons. User accepts the wheel-skin-injection update-fragility risk.
   Verified list 8/8 visible with correct homes+assets, search pink, submenu 0.
 - Star-badge DiffTier-nil probe (session 6) still queued alongside.
 
+### Current task (session 8): Etterna (.sm) + Quaver (.qp/.qua) songs and skins
+Goal (user): convert the ETTERNA and QUAVER folders in FunkyChart_v1.23
+(2 .sm songs + AmbieArrowsFFR skin, 3 .qp sets / 5 .qua difficulties + Still's
+Circles skin) and port them into the custom-song script. OSU folder already done.
+- Surveyed: .sm = dance-single 4K, single BPM (250/160), no stops, Challenge
+  18/13, holds+rolls present, mines to skip (Gurls 4, Nyan 22). .qua = Keys4
+  x5, ms clock, holds via EndTime, real SV (SliderVelocities), BPM timing
+  points. No PyYAML → hand-parse .qua. No Pillow → reuse osu2skin PNG codec.
+- Plan: session-8 docs commit → tools/sm2gakuran.py + tools/qua2gakuran.py
+  (import shared bits from osu2gakuran; same chart schema, source=etterna/
+  quaver) → tools/qua2skin.py + tools/etterna2skin.py (import osu2skin codec;
+  quaver per-lane taps via manifest.taps; etterna single-arrow skin) →
+  loader SOURCE_TAGS + icons (etterna/quaver PNGs, v2.0.25) → backup +
+  import to workspace → live verify (load all, spot-play, skins apply) →
+  final commit. Skins go to repo GakuranCharts/Skins (converted output, not
+  the forbidden source folder).
+
 ### Session 5 (2026-10-11): stage keyboard guard (v2.0.21), chart import answer
 - [x] User bug: Space stands you up from the REAL stage keyboard. Cause (live-verified): seated, Space is
       Roblox's jump and a jump stands you up; the engine only sinks Space while a session runs AND the
