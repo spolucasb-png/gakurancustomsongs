@@ -110,13 +110,36 @@ Order: A1.5, then A1, A2, A3. A1 is Python-only and cannot regress the loader, s
   chart.offsetMs`. Verified live: global 50 + chart 123 -> injected `offsetMs=173`.
 - [ ] Clearer "N notes dropped" message when validating charts.
 
-### 6. Startup self-test and `_G.GakuranChart.diag()`
-- [ ] Report which hooks and fields were found at startup (`_session`, `_view`, `_registry._byId`, `_active`, `_carryOverStats`, ...).
-- Why: when a game update breaks something, we see which piece changed. Do this before riskier work.
+### 6. Startup self-test and `_G.GakuranChart.diag()` — DONE (v2.0.13)
+- [x] `diag()` reports, as one JSON-encodable table: every getgc target, the
+  private service state (`_session`, `_view`, `_resultsScreen`, `_registry`,
+  `_active`, `_carryOverStats`), the service methods, each hook slot's status
+  (`installed` / `beneath-foreign` / `displaced` / `absent`), counts (charts,
+  parents, customIds, guard ids, ledger recs, registry size, skin packs, wheel
+  controller) and the live settings. Plus a `summary` line.
+- State and methods are checked differently on purpose: private state via
+  `rawget` (identity on the instance is the point), methods via plain index
+  (they live on the class and arrive through `__index`). The first cut used
+  `rawget` for both and reported `Stop`/`Get`/`Init`/`IsPlaying` as missing —
+  a false alarm in a diagnostic is worse than no diagnostic.
+- Baseline on placeVersion 7646: all 9 targets found, 8/8 hooks installed,
+  6/6 methods present, `_registry` true with the rest nil while idle.
 
-### 7. Single-pass `getgc` scan
-- [ ] `gcFind` runs ~8 full scans at startup. Collect every target (service, stats, relay, chartUtil, noteSprites, themeSettings, settings host) in one pass.
-- [ ] Use the diag output from step 6 to confirm the same targets are found.
+### 7. Single-pass `getgc` scan — DONE (v2.0.14)
+- [x] It was **9** scans, not 8 (the ninth is the note-shape settings host, in a
+  top-level `do` block). New `gcScan(specs)` resolves all nine in one sweep:
+  each predicate retires the moment it matches, and the sweep returns early
+  once nothing is pending. Predicates were moved verbatim. No `pcall` per
+  predicate - they only `type()`/`rawget()` a table, which cannot error, and a
+  pcall per predicate per heap value would cost more than the passes it saves.
+- [x] Confirmed via step 6: `diag()` output is identical to the v2.0.13
+  baseline (same 9 modules, 8 hooks, 6 methods, and identical counts -
+  `registryById=106`, `ledgerRecs=7`, `customCharts=16`, `parents=3`).
+- Measured in-game on a 1,981,736-object heap: 9 sweeps 1.695 s -> 1 sweep
+  0.566 s. **1.13 s saved per execution, 3.0x faster** (not 9x: both the old
+  and new paths stop early once a target is found).
+- `gcFind` is kept for any lookup that has to happen later, but nothing calls
+  it now.
 
 ### 8. Local scores (`Scores.json`)
 - [ ] First capture what `SubmitStats` actually receives for a custom song (via Madium). Don't guess the payload shape.

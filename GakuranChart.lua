@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.12
+    GakuranChart v2.0.14
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.12"
+local VERSION = "2.0.14"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -125,10 +125,74 @@ local function gcFind(pred)
     return nil
 end
 
-local serviceClass = gcFind(function(t)
-    return type(rawget(t, "StartPlay")) == "function" and type(rawget(t, "Get")) == "function"
-        and type(rawget(t, "Stop")) == "function"
-end)
+-- Resolve many targets in ONE pass. getgc(true) walks the whole Luau heap, and
+-- the loader used to call gcFind nine times at startup - nine full heap sweeps
+-- for nine tables. Each predicate drops out of the running set the moment it
+-- matches, so a value is only tested against targets still missing, and the
+-- scan returns early once everything is found.
+--
+-- Match semantics are identical to nine separate gcFind calls: iteration order
+-- over getgc(true) is the same, so each target still binds to the first table
+-- that satisfies its predicate. No pcall here, deliberately: the predicates
+-- only ever type()/rawget() a table, which cannot error, and a pcall per
+-- predicate per heap value would cost more than the passes this saves.
+local function gcScan(specs)
+    local out, pending = {}, 0
+    for _ in pairs(specs) do pending += 1 end
+    if pending == 0 then return out end
+    for _, v in next, fn.getgc(true) do
+        if type(v) == "table" then
+            for name, pred in pairs(specs) do
+                if out[name] == nil and pred(v) then
+                    out[name] = v
+                    pending -= 1
+                    if pending == 0 then return out end
+                end
+            end
+        end
+    end
+    return out
+end
+
+-- Every table the loader looks up on the heap, found in a single sweep.
+-- Sections 1, 5.5 and 5.7 read their target out of GC instead of scanning
+-- again; gcFind stays available for anything that has to look later.
+local GC = gcScan({
+    service = function(t)
+        return type(rawget(t, "StartPlay")) == "function" and type(rawget(t, "Get")) == "function"
+            and type(rawget(t, "Stop")) == "function"
+    end,
+    stats = function(t) return type(rawget(t, "SubmitStats")) == "function" end,
+    relay = function(t)
+        return type(rawget(t, "QueryJamSync")) == "function" and type(rawget(t, "FireStart")) == "function"
+    end,
+    difficulty = function(t)
+        return type(rawget(t, "Key")) == "function" and type(rawget(t, "Resolve")) == "function"
+            and type(rawget(t, "Tiers")) == "table"
+    end,
+    wheelKit = function(t)
+        return type(rawget(t, "tier")) == "function" and type(rawget(t, "textW")) == "function"
+            and type(rawget(t, "ink")) == "function"
+    end,
+    chartUtil = function(t)
+        return type(rawget(t, "CacheSoundLength")) == "function"
+            and type(rawget(t, "resolvePlayable")) == "function"
+    end,
+    noteSprites = function(t)
+        return type(rawget(t, "Shapes")) == "table" and type(rawget(t, "Tails")) == "table"
+            and type(rawget(t, "GetShape")) == "function" and type(rawget(t, "GetTail")) == "function"
+    end,
+    themeSettings = function(t)
+        return type(rawget(t, "StoredToViewTheme")) == "function"
+            and type(rawget(t, "SanitizeAssetId")) == "function"
+    end,
+    noteShapeHost = function(t)
+        return type(rawget(t, "GetNoteShape")) == "function"
+            and type(rawget(t, "GetViewTheme")) == "function"
+    end,
+})
+
+local serviceClass = GC.service
 if not serviceClass then
     warn("[GakuranChart] Could not find RhythmServiceClient - has the rhythm system changed?")
     return
@@ -307,15 +371,13 @@ function HK.makeFire(b)
 end
 
 -- Safety net 1: never submit scores for custom songs
-local statsMod = gcFind(function(t) return type(rawget(t, "SubmitStats")) == "function" end)
+local statsMod = GC.stats
 if statsMod then
     HK.ensure("SubmitStats", statsMod, "SubmitStats", HK.makeSubmit)
 end
 
 -- Safety net 2: never query jam sync / fire amp relay for custom songs
-local relayMod = gcFind(function(t)
-    return type(rawget(t, "QueryJamSync")) == "function" and type(rawget(t, "FireStart")) == "function"
-end)
+local relayMod = GC.relay
 if relayMod then
     HK.ensure("QueryJamSync", relayMod, "QueryJamSync", HK.makeQuery)
     HK.ensure("FireStart", relayMod, "FireStart", HK.makeFire)
@@ -375,10 +437,7 @@ function HK.makeDiffKey(b)
         return b.under(s, ...)
     end
 end
-local diffMod = gcFind(function(t)
-    return type(rawget(t, "Key")) == "function" and type(rawget(t, "Resolve")) == "function"
-        and type(rawget(t, "Tiers")) == "table"
-end)
+local diffMod = GC.difficulty
 if diffMod then
     HK.ensure("DiffKey", diffMod, "Key", HK.makeDiffKey)
 else
@@ -402,10 +461,7 @@ function HK.makeDiffTier(b)
         return r
     end
 end
-local kitMod = gcFind(function(t)
-    return type(rawget(t, "tier")) == "function" and type(rawget(t, "textW")) == "function"
-        and type(rawget(t, "ink")) == "function"
-end)
+local kitMod = GC.wheelKit
 if kitMod then
     HK.ensure("DiffTier", kitMod, "tier", HK.makeDiffTier)
 else
@@ -1107,10 +1163,7 @@ end
 -- here and register its real length via CacheSoundLength so the
 -- session lasts exactly as long as the audio.
 ----------------------------------------------------------------
-local chartUtil = gcFind(function(t)
-    return type(rawget(t, "CacheSoundLength")) == "function"
-        and type(rawget(t, "resolvePlayable")) == "function"
-end)
+local chartUtil = GC.chartUtil
 
 local function cacheAudioLength(assetId)
     if not chartUtil then return nil end
@@ -1164,10 +1217,7 @@ local skinState = nil
 local settingsThemeHosts = {}  -- tables that own a raw _theme with noteShape
 
 do
-    local mod = gcFind(function(t)
-        return type(rawget(t, "GetNoteShape")) == "function"
-            and type(rawget(t, "GetViewTheme")) == "function"
-    end)
+    local mod = GC.noteShapeHost
     if mod then
         if type(rawget(mod, "_theme")) == "table" then
             table.insert(settingsThemeHosts, mod)
@@ -1183,15 +1233,9 @@ do
     end
 end
 
-local noteSpritesMod = gcFind(function(t)
-    return type(rawget(t, "Shapes")) == "table" and type(rawget(t, "Tails")) == "table"
-        and type(rawget(t, "GetShape")) == "function" and type(rawget(t, "GetTail")) == "function"
-end)
+local noteSpritesMod = GC.noteSprites
 
-local themeSettingsMod = gcFind(function(t)
-    return type(rawget(t, "StoredToViewTheme")) == "function"
-        and type(rawget(t, "SanitizeAssetId")) == "function"
-end)
+local themeSettingsMod = GC.themeSettings
 
 ----------------------------------------------------------------
 -- 5.7b Skin visual pass: dedicated hold-head, pressed-receptor and
@@ -3119,6 +3163,105 @@ _G.GakuranChart = {
     stop = stopChart,
     current = function() return currentChartPath end,
     skins = listSkinPacks,
+    -- Startup self-test. The loader reads private fields of a game it does not
+    -- control, so when an update breaks something this says WHICH piece moved
+    -- instead of just failing. Pure read, JSON-encodable, no side effects.
+    diag = function()
+        local function n(t) local c = 0 for _ in pairs(t or {}) do c += 1 end return c end
+        -- Private state: rawget, because identity on the instance is the point.
+        local function fields(t, keys)
+            local out = {}
+            for _, k in ipairs(keys) do
+                out[k] = (type(t) == "table") and (rawget(t, k) ~= nil) or false
+            end
+            return out
+        end
+        -- Methods: plain index, because they live on the class and arrive
+        -- through __index. rawget would report every one of them missing.
+        local function methods(t, keys)
+            local out = {}
+            for _, k in ipairs(keys) do
+                local ok, v = pcall(function() return t[k] end)
+                out[k] = ok and type(v) == "function"
+            end
+            return out
+        end
+
+        -- getgc targets, in the order section 1/5.5/5.7 look for them.
+        local mods = {
+            RhythmServiceClient   = serviceClass ~= nil,
+            RhythmService         = type(service) == "table",
+            StatsModule           = statsMod ~= nil,
+            JamRelayModule        = relayMod ~= nil,
+            RhythmDifficulty      = diffMod ~= nil,
+            RhythmWheelKit        = kitMod ~= nil,
+            RhythmChartUtil       = chartUtil ~= nil,
+            RhythmNoteSprites     = noteSpritesMod ~= nil,
+            RhythmThemeSettings   = themeSettingsMod ~= nil,
+            SettingsThemeHosts    = #settingsThemeHosts,
+        }
+        local missing = {}
+        for k, v in pairs(mods) do
+            if v == false then table.insert(missing, k) end
+        end
+        table.sort(missing)
+
+        -- Hook slots: is the slot ours, and is ours what the game will call?
+        local hooks = {}
+        for _, name in ipairs({ "SubmitStats", "QueryJamSync", "FireStart",
+                                "ListPlayableSongInfosForHeld", "DiffKey",
+                                "DiffTier", "StartPlay", "WheelMenu" }) do
+            local b = hookBase[name]
+            if type(b) ~= "table" then
+                hooks[name] = "absent"
+            else
+                local cur = nil
+                pcall(function() cur = b.mod[b.key] end)
+                if cur == b.wrap then hooks[name] = "installed"
+                elseif cur ~= nil and HK.chainContains(cur, b.wrap) then hooks[name] = "beneath-foreign"
+                else hooks[name] = "displaced" end
+            end
+        end
+
+        local reg = type(service) == "table" and rawget(service, "_registry") or nil
+        return {
+            version = VERSION,
+            gen = _G.GakuranChartGen,
+            summary = (#missing == 0)
+                and "all getgc targets found"
+                or (#missing .. " target(s) MISSING: " .. table.concat(missing, ", ")),
+            modules = mods,
+            -- Private service state the loader reads. _session/_view/
+            -- _resultsScreen/_carryOverStats are nil while idle, so false is
+            -- normal there; _registry false is a real break.
+            state = fields(service, { "_session", "_view", "_resultsScreen",
+                                      "_registry", "_active", "_carryOverStats" }),
+            -- These must all be true. Any false means the engine moved.
+            methods = methods(service, { "StartPlay", "Stop", "Get", "Init",
+                                         "IsPlaying", "ListPlayableSongInfosForHeld" }),
+            registry = fields(reg, { "_byId", "_list" }),
+            hooks = hooks,
+            counts = {
+                charts = #listChartFiles(),
+                parents = n(parents),
+                customIds = n(customIds),
+                customCharts = n(customCharts),
+                skinPacks = #listSkinPacks(),
+                guardIds = n(guardIds),
+                ledgerRecs = n(LG.ledger and LG.ledger.recs),
+                registryById = n(reg and rawget(reg, "_byId")),
+                wheelController = findWheelController() ~= nil,
+            },
+            settings = {
+                skin = settings.skin,
+                showInWheel = settings.showInWheel == true,
+                customsOnly = settings.customsOnly == true,
+                offsetMs = settings.offsetMs or 0,
+                bgEnabled = settings.bgEnabled == true,
+                bgTransparency = settings.bgTransparency or 0,
+            },
+        }
+    end,
     -- Multi-difficulty parents: { songId = { difficulty names, easiest first } }
     parents = function()
         local out = {}
