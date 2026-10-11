@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.18
+    GakuranChart v2.0.19
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.18"
+local VERSION = "2.0.19"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -504,6 +504,119 @@ function HK.makeStartPlay(b)
 end
 HK.ensure("StartPlay", service, "StartPlay", HK.makeStartPlay)
 
+-- 4K+ (more than 4 lanes). The engine itself is lane-count generic; what is
+-- hard-coded to 2/4 is the lane count (RhythmChartUtil.resolvePlayable), the
+-- key map, the hint labels and the view theme, and all four are looked up
+-- through module tables, so four stable wrappers cover it (same discipline as
+-- above: each closes over its own record only). Only OUR songs can ask for
+-- more than 4 lanes (song.gakuranLanes, set by buildGameSong); every other
+-- input - all of the game's own songs - reaches the original untouched. The
+-- live loader instance puts the player's keys on the records (b.keyNames /
+-- b.hintLabels) and clears them in cleanup, so a retired instance is never
+-- called. Verified by hand in a probe before this was written: a 7-lane song
+-- starts and runs with exactly a lanes override and an extended theme.
+HK.maxLanes = 7
+
+function HK.makeResolve(b)
+    return function(song, mode, ...)
+        local p = b.under(song, mode, ...)
+        if type(song) == "table" and type(p) == "table" then
+            local n = song.gakuranLanes
+            if type(n) == "number" and n > 4 then p.lanes = n end
+        end
+        return p
+    end
+end
+
+-- Stock GetViewTheme(n > 4) errors (the stored theme only has 2- and 4-lane
+-- colour arrays). For n > 4 build the view theme from a copy of the stored
+-- theme whose 4-lane arrays are cycled up to n, through the module's CURRENT
+-- StoredToViewTheme (so an active skin still applies).
+function HK.makeViewTheme(b)
+    return function(self, n, ...)
+        local tm = b.themeMod
+        if type(n) == "number" and n > 4 and type(tm) == "table" and type(self) == "table" then
+            if not self._hydrated then pcall(self.HydrateFromServer, self) end
+            local stored = self._theme
+            if type(stored) == "table" then
+                local s2 = {}
+                for k, v in pairs(stored) do s2[k] = v end
+                for _, key in ipairs({ "noteIn4", "noteOut4", "recBorder4", "recPress4" }) do
+                    local src = stored[key]
+                    if type(src) == "table" then
+                        local ext = {}
+                        for i = 1, n do ext[i] = src[((i - 1) % 4) + 1] end
+                        s2[key] = ext
+                    end
+                end
+                return tm.StoredToViewTheme(s2, n)
+            end
+        end
+        return b.under(self, n, ...)
+    end
+end
+
+function HK.makeHintLabels(b)
+    return function(self, n, ...)
+        local f = b.hintLabels
+        if type(n) == "number" and n > 4 and type(f) == "function" then
+            local ok, labels = pcall(f, n)
+            if ok and type(labels) == "table" and #labels == n then return labels end
+        end
+        return b.under(self, n, ...)
+    end
+end
+
+-- The service fills a song's keyMapOverride from this getter only when the
+-- song has none, so answering for n > 4 here covers every start (Rayfield Play,
+-- wheel, picker) and reads the player's CURRENT keys each time.
+function HK.makeKeyMap(b)
+    return function(self, n, ...)
+        local f = b.keyNames
+        if type(n) == "number" and n > 4 and type(f) == "function" then
+            local ok, names = pcall(f, n)
+            if ok and type(names) == "table" and #names == n then
+                local map, good = {}, true
+                for lane = 1, n do
+                    local okC, code = pcall(function() return Enum.KeyCode[names[lane]] end)
+                    if okC and code then map[code] = lane else good = false end
+                end
+                if good then return map end
+            end
+        end
+        return b.under(self, n, ...)
+    end
+end
+
+do
+    local cu, sm = GC.chartUtil, GC.noteShapeHost
+    if cu and type(rawget(cu, "resolvePlayable")) == "function" then
+        HK.ensure("ResolvePlayable", cu, "resolvePlayable", HK.makeResolve)
+    else
+        warn("[GakuranChart] RhythmChartUtil not found - charts with more than 4 lanes will be refused")
+    end
+    if sm and type(rawget(sm, "GetViewTheme")) == "function" then
+        HK.ensure("ViewTheme", sm, "GetViewTheme", HK.makeViewTheme)
+        local vb = hookBase["ViewTheme"]
+        if type(vb) == "table" then vb.themeMod = GC.themeSettings end
+        if type(rawget(sm, "GetKeyboardHintLabels")) == "function" then
+            HK.ensure("HintLabels", sm, "GetKeyboardHintLabels", HK.makeHintLabels)
+        end
+        if type(rawget(sm, "GetKeyboardKeyMap")) == "function" then
+            HK.ensure("KeyMap", sm, "GetKeyboardKeyMap", HK.makeKeyMap)
+        end
+    else
+        warn("[GakuranChart] RhythmSettingsClient not found - charts with more than 4 lanes will be refused")
+    end
+end
+
+-- True once every piece a >4-lane play needs is wired.
+function HK.lanesSupported()
+    local r, v, k = hookBase["ResolvePlayable"], hookBase["ViewTheme"], hookBase["KeyMap"]
+    return type(r) == "table" and type(v) == "table" and type(v.themeMod) == "table"
+        and type(k) == "table" and type(k.keyNames) == "function"
+end
+
 ----------------------------------------------------------------
 -- Wheel-native difficulty submenu (multi-difficulty parent rows).
 -- The guitar submenu's CONTENT is hard-coded and unusable, but the wheel's
@@ -644,6 +757,7 @@ local settings = {
     showInWheel = false,
     customsOnly = false,   -- song wheel shows only custom songs (needs showInWheel)
     skin = "",   -- selected osu!mania skin pack name ("" = game default)
+    keys = {},   -- 4K+ key names per lane count: keys["5"] = { "S", "D", ... }
 }
 
 local function saveSettings()
@@ -675,6 +789,69 @@ end
 do
     local b = hookBase["ListPlayableSongInfosForHeld"]
     if type(b) == "table" then b.customsOnly = settings.customsOnly == true end
+end
+
+-- 4K+ key bindings. settings.keys["5".."7"] = array of KeyCode names, one per
+-- lane. A missing, unknown, duplicated or unusable list falls back to the
+-- defaults for that lane count as a whole. The defaults avoid K: Rayfield's own
+-- default toggle key is K (read from ui/Rayfield.lua, not yet seen live).
+HK.defaultKeys = {
+    [5] = { "S", "D", "Space", "J", "L" },
+    [6] = { "S", "D", "F", "J", "L", "Semicolon" },
+    [7] = { "S", "D", "F", "Space", "J", "L", "Semicolon" },
+}
+HK.shortKey = {
+    Semicolon = ";", Comma = ",", Period = ".", Slash = "/", Space = "Spc",
+    Return = "Ent", LeftShift = "LS", RightShift = "RS", Tab = "Tab",
+}
+
+function HK.usableKey(name)
+    if type(name) ~= "string" or name == "" or name == "Unknown" or name == "Escape" then
+        return false
+    end
+    local ok, code = pcall(function() return Enum.KeyCode[name] end)
+    return ok and code ~= nil and code ~= Enum.KeyCode.Unknown
+end
+
+function HK.cleanKeys(n, list)
+    if type(list) == "table" and #list == n then
+        local seen, good = {}, true
+        for i = 1, n do
+            local k = list[i]
+            if not HK.usableKey(k) or seen[k] then good = false break end
+            seen[k] = true
+        end
+        if good then
+            local out = {}
+            for i = 1, n do out[i] = list[i] end
+            return out
+        end
+    end
+    local d, out = HK.defaultKeys[n] or {}, {}
+    for i = 1, n do out[i] = d[i] or "Unknown" end
+    return out
+end
+
+-- Called by the hook wrappers at the start of a play (n = lane count).
+function HK.keyNamesFor(n)
+    local stored = type(settings.keys) == "table" and settings.keys[tostring(n)] or nil
+    return HK.cleanKeys(n, stored)
+end
+
+function HK.hintLabelsFor(n)
+    local names, out = HK.keyNamesFor(n), {}
+    for i = 1, n do out[i] = HK.shortKey[names[i]] or names[i] end
+    return out
+end
+
+-- Hand the live instance's providers to the shared records (cleanup clears
+-- them again, but only while they are still ours).
+for _, nm in ipairs({ "KeyMap", "HintLabels" }) do
+    local r = hookBase[nm]
+    if type(r) == "table" then
+        r.keyNames = HK.keyNamesFor
+        r.hintLabels = HK.hintLabelsFor
+    end
 end
 
 ----------------------------------------------------------------
@@ -734,7 +911,17 @@ local function readChart(path)
         return nil, "Chart missing valid 'bpm'"
     end
     -- lane sanity: Gakuran lanes are 1-based (1..lanes); clamp invalid lanes out
+    -- A Keyboard chart may declare more than 4 lanes ("lanes": 5..7, written by
+    -- the converter when it does not fold); the 4K+ hooks make those playable.
     local lanes = (data.mode == "Guitar") and 2 or 4
+    local declared = math.floor(tonumber(data.lanes) or 0)
+    if declared > 4 and data.mode == "Keyboard" then
+        if declared > HK.maxLanes then
+            return nil, ("Chart needs %d lanes; this loader supports up to %d"):format(declared, HK.maxLanes)
+        end
+        lanes = declared
+    end
+    data._laneCount = lanes
     local cleaned, dropped = {}, 0
     for _, n in ipairs(data.charts[data.mode]) do
         if type(n) == "table" and type(n.b) == "number" and type(n.l) == "number"
@@ -991,6 +1178,13 @@ local function buildGameSong(chart)
         soundIds = { [mode] = audioAsset },
         difficulty = chart.difficulty or { [mode] = "Custom" },
     }
+    local laneCount = tonumber(chart._laneCount) or 4
+    if laneCount > 4 then
+        if not HK.lanesSupported() then
+            return nil, ("Chart needs %d lanes but the 4K+ hooks are not installed"):format(laneCount)
+        end
+        song.gakuranLanes = laneCount
+    end
     if type(chart.backgroundFile) == "string" and fn.isfile(chart.backgroundFile) then
         local okB, asset = pcall(fn.getlocalasset, chart.backgroundFile)
         if okB and asset then
@@ -2259,7 +2453,8 @@ function HK.restore()
     local base = _G.GakuranChartHookBase
     if type(base) ~= "table" or base.version ~= HOOK_BASE_VERSION then return true end
     local allGone = true
-    for _, name in ipairs({ "SubmitStats", "QueryJamSync", "FireStart", "ListPlayableSongInfosForHeld", "StartPlay", "WheelMenu", "DiffKey", "DiffTier" }) do
+    for _, name in ipairs({ "SubmitStats", "QueryJamSync", "FireStart", "ListPlayableSongInfosForHeld", "StartPlay", "WheelMenu", "DiffKey", "DiffTier",
+                          "ResolvePlayable", "ViewTheme", "HintLabels", "KeyMap" }) do
         local b = base[name]
         if type(b) == "table" and type(b.mod) == "table" and type(b.wrap) == "function" then
             local cur = b.mod[b.key]
@@ -2316,6 +2511,15 @@ _G.GakuranChartCleanup = function()
             local sb = _G.GakuranChartHookBase and _G.GakuranChartHookBase["SubmitStats"]
             if type(sb) == "table" and sb.scoreHandler == HK.scoreHandler then
                 sb.scoreHandler = nil   -- a retired instance must not record
+            end
+        end)
+        pcall(function()
+            for _, nm in ipairs({ "KeyMap", "HintLabels" }) do
+                local kb = _G.GakuranChartHookBase and _G.GakuranChartHookBase[nm]
+                if type(kb) == "table" and kb.keyNames == HK.keyNamesFor then
+                    kb.keyNames = nil
+                    kb.hintLabels = nil
+                end
             end
         end)
         pcall(destroyPicker)
@@ -2500,6 +2704,7 @@ end
 local SWAP_FIELDS = {
     "title", "artist", "charter", "bpm", "animationbpm", "animationBpmChanges",
     "startAt", "offsetMs", "approach", "charts", "soundIds", "difficulty", "coverId",
+    "gakuranLanes",
 }
 
 local function pickDifficultyInner(parent, d, state)
@@ -3247,7 +3452,7 @@ local function selectDiff(d)
                     chart.title .. " - " .. (chart.artist or ""),
                     d.name, chart.mode, tostring(chart.bpm),
                     tostring(#chart.charts[chart.mode]),
-                    tostring((chart.mode == "Guitar") and 2 or 4),
+                    tostring(chart._laneCount or ((chart.mode == "Guitar") and 2 or 4)),
                     ((chart._droppedNotes or 0) > 0)
                         and ("  (" .. chart._droppedNotes .. " invalid notes dropped)") or ""
                 )
@@ -3403,6 +3608,67 @@ TabOpt:CreateColorPicker({
         saveSettings()
     end,
 })
+
+-- 4K+ key bindings (5-7 lanes). One keybind per lane, stored in Settings.json
+-- and read at the START of every play, so a rebind applies to the next play
+-- (wheel songs included). A duplicate or unusable key is rejected and the box
+-- goes back to the previous key.
+do
+    local TabKeys = Window:CreateTab("Keys (4K+)", 4483362458)
+    TabKeys:CreateLabel("Keys for charts with 5-7 lanes (4-lane charts use the game's own keys)")
+    TabKeys:CreateLabel("Avoid K: it is Rayfield's default toggle key. Applies from the next play.")
+    local elems, resetting = {}, false
+    for n = 5, HK.maxLanes do
+        TabKeys:CreateSection(("%d lanes"):format(n))
+        local names = HK.keyNamesFor(n)
+        elems[n] = {}
+        for lane = 1, n do
+            elems[n][lane] = TabKeys:CreateKeybind({
+                Name = ("%dK  lane %d"):format(n, lane),
+                CurrentKeybind = names[lane],
+                HoldToInteract = false,
+                CallOnChange = true,
+                Ext = true,
+                Callback = function(key)
+                    if resetting then return end
+                    local cur = HK.keyNamesFor(n)
+                    if not HK.usableKey(key) then
+                        notify("Keys", tostring(key) .. " cannot be used", true)
+                        pcall(function() elems[n][lane]:Set(cur[lane]) end)
+                        return
+                    end
+                    for other = 1, n do
+                        if other ~= lane and cur[other] == key then
+                            notify("Keys", ("%s is already lane %d of %dK"):format(key, other, n), true)
+                            pcall(function() elems[n][lane]:Set(cur[lane]) end)
+                            return
+                        end
+                    end
+                    cur[lane] = key
+                    if type(settings.keys) ~= "table" then settings.keys = {} end
+                    settings.keys[tostring(n)] = cur
+                    saveSettings()
+                end,
+            })
+        end
+    end
+    TabKeys:CreateButton({
+        Name = "Reset 4K+ keys to defaults",
+        Callback = function()
+            resetting = true
+            settings.keys = {}
+            saveSettings()
+            for n = 5, HK.maxLanes do
+                local d = HK.keyNamesFor(n)
+                for lane = 1, n do
+                    pcall(function() elems[n][lane]:Set(d[lane]) end)
+                end
+            end
+            resetting = false
+            notify("Keys", "4K+ keys reset to defaults")
+        end,
+    })
+end
 
 TabOpt:CreateSection("Integration")
 -- Forward-declared so the two wheel toggles can sync each other: enabling
@@ -3646,7 +3912,8 @@ _G.GakuranChart = {
         local hooks = {}
         for _, name in ipairs({ "SubmitStats", "QueryJamSync", "FireStart",
                                 "ListPlayableSongInfosForHeld", "DiffKey",
-                                "DiffTier", "StartPlay", "WheelMenu" }) do
+                                "DiffTier", "StartPlay", "WheelMenu",
+                                "ResolvePlayable", "ViewTheme", "HintLabels", "KeyMap" }) do
             local b = hookBase[name]
             if type(b) ~= "table" then
                 hooks[name] = "absent"
