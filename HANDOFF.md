@@ -23,25 +23,78 @@ settings page is optional and comes later. Folding (`fold_columns`) stays as the
 default/fallback for anything the engine cannot render.
 
 Plan / progress (update after every step):
-- [ ] Back up the deployed v2.0.16 loader (outside the workspace), then
-      `python tools/deploy.py --live` (runs check.py) so the workspace has v2.0.18.
-- [ ] Read-only research in the live client: is lane count really fixed per
-      mode (`RhythmChartUtil.getLaneCount`)? who consumes it (note pool, receptors,
-      highway layout, input, judging)? where are the key->lane bindings and the
-      game's own keybind settings page? Record findings here BEFORE designing.
-- [ ] Decide: extra lanes in the engine vs. loader-side rendering/judging; if the
-      engine cannot do it, say so here and fall back to a better fold, not a hack.
-- [ ] Only then design the Rayfield binding page + loader changes (candidate first).
+- [x] Back up the deployed v2.0.16 loader, `python tools/deploy.py --live` (v2.0.18). Done.
+- [x] Read-only research in the live client (client 14512): the engine is
+      lane-count-generic, so real 4K+ looks feasible. Findings below. NOT tested.
+- [ ] Probe with a throwaway Luau script (no loader change) whether a >4-lane
+      session starts and plays: wrap `RhythmChartUtil.resolvePlayable`, set
+      `playable.lanes = 7` + a key map, `StartPlay` a 7K chart, watch for errors.
+- [ ] Loader: `lanes` + `keyMapOverride` on our song, a theme for N lanes, hint
+      labels, skin lane mapping (design below). Candidate first, then live-test.
+- [ ] Rayfield "Keys (4K+)" page: per-lane-count key binding (5K, 6K, 7K...), saved
+      in Settings.json. Later, optionally, the game's own settings page (see below).
+- [ ] Converter: stop folding when the loader supports the lane count (`--no-fold`
+      semantics stay; add the real column count to the chart, `sourceKeys` exists).
 
-Decisions / findings: (none yet - the first two items are being done now)
+### Findings (live decompile, 2026-10-11) - 4K+ is an engine-supported shape
+- `RhythmChartUtil.getLaneCount(mode)` is hard-coded (Guitar/RhythmGuitar 2, else 4)
+  and its ONLY caller among the 48 `Rhythm*` scripts is `resolvePlayable`
+  (RhythmChartUtil L317: `local v28 = t.getLaneCount(arg25)`; module-table
+  lookup, so hookable). The playable's `lanes` then drives everything.
+- `RhythmEngine` is generic: `_lanes = playable.lanes`, loops `1.._lanes`, rejects
+  notes with lane outside `1.._lanes` (L2012/2036), `_laneCursor` sized by `_lanes`.
+- `RhythmView.new(lanes, ...)` stores `_laneCount` and loops over it (45 hits), so
+  receptors/lanes/notes are built per lane count. NOT yet checked: lane width /
+  `GetLaneXAt` for 5-7 lanes, note pool sizing, hold bodies.
+- **Input:** `RhythmEngine._buildKeyMap(playable)` returns `playable.keyMapOverride`
+  when set, else hard-coded defaults for 2 and 4 lanes, else `{}` (no keys at all).
+  `resolvePlayable` copies `keyMapOverride` from the SONG table (L369), so a
+  loader-built song can carry its own KeyCode->lane map. `RhythmServiceClient`
+  (L934) fills it from `RhythmSettingsClient:GetKeyboardKeyMap(lanes)` only if nil.
+  Probed: `GetKeyboardKeyMap(5/6/7)` = empty table, `GetKeyboardHintLabels(5/6/7)` = empty.
+- **Theme:** `RhythmSettingsClient:GetViewTheme(5/6/7)` ERRORS
+  (`RhythmThemeSettings:109: attempt to index nil with number`; 2 and 4 work), so a
+  >4-lane view needs a theme supplied by the loader (the loader already wraps
+  `StoredToViewTheme` for skins - extend that, building the N-lane theme from the
+  4-lane one). Lane colours come from `GetLaneVizColor(laneCount, lane, ...)`.
+- **Game settings page:** `SettingsServiceUI` (5,266 lines) builds exactly two key
+  sections, "Two Lanes" (L2593) and "Four Lanes" (L2608) via `_buildKeybindRow`
+  (L2321), plus 2/4-lane lane-colour pages. Adding 5-7K there means editing that
+  closure-heavy module - same trap as the guitar submenu. **Decision: Rayfield page
+  first** (as the user asked); the game page is a later, optional port.
+- Controller map `_buildControllerMap(n)` only knows 2 vs 4; 4K+ is keyboard-only
+  unless extended.
+
+### Design sketch (not implemented)
+1. Chart JSON: loader reads `lanes` (or `sourceKeys`) when > 4 and the song's
+   charts are unfolded; folded charts keep working unchanged (4 lanes).
+2. A `resolvePlayable` wrapper (new slot in HookBase v2, same discipline as
+   `StartPlay`): for songs we own with `song.gakuranLanes`, after the original
+   returns set `playable.lanes`, ensure `keyMapOverride`, leave everything else.
+3. Key binding: Rayfield page with one keybind row per lane for each of 5K..7K
+   (defaults e.g. 5K S D Space K L / 6K S D F J K L / 7K S D F Space J K L),
+   stored in `Settings.json`, put on `song.keyMapOverride` when a chart starts.
+   Reject duplicate keys inside one lane count; Escape/Unknown are unusable.
+4. Theme/labels/skin: supply an N-lane theme and hint labels; the skin visuals pass
+   indexes lanes 1..4 - map extra lanes onto the nearest skin lane (untested).
+5. Everything stays additive and falls back to the fold if anything is missing.
+
+### Risks / unknowns
+- Whether `RhythmView` lays out 5-7 lanes sanely (width, hit zones, perspective
+  mode `sess._perspective`, SV pass `svApplyFrameInner`, skin pass).
+- Anything else that reads `getLaneCount` or assumes 2/4 outside the `Rhythm*`
+  scripts (only those 48 were scanned) - e.g. results screen, stats, record slips.
+- Engine judging/stat code with `lanes > 4` is unexercised.
+- Never forced live on a real stage play; our songs only.
 
 ## State
 `GakuranChart.lua` is the single loader, **v2.0.18**. Everything below was
 verified live on placeVersion 7646 (Madium 2.0.0) before being committed.
-**Deploy state:** nothing has been deployed with `deploy.py --live` since
-v2.0.16 - the workspace `GakuranChart.lua` is still v2.0.16. The repo file
-(v2.0.18, hash `5BA4D24B9C68...`) exists in the workspace as
-`GakuranChart_notifyguard_candidate.lua`; the live client was last running it.
+**Deploy state:** v2.0.18 is deployed live (`deploy.py --live`, check.py passed,
+workspace `GakuranChart.lua` == repo, hash `5BA4D24B9C68...`). The previous v2.0.16
+deployed copy was backed up to
+`C:\Users\Administrator\Desktop\Referencesandmods\_scratch_convert\GakuranChart_v2.0.16_deployed_backup.lua`
+(hash `A2E227C9D7F6...`). The running client was already on the identical candidate.
 
 Recent work, newest first:
 - **v2.0.18 - reload hardening (ROADMAP 9c).** (1) `HK.loadRayfield` patches
