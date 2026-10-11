@@ -39,11 +39,17 @@ committed is lost. So:
       unless `--include-nonmania` (approximate conversion): NOT imported, asked the user.
       The osu! Songs library is NOT imported (user: only the FunkyChart folder).
 - [x] Cleanup done: `__test_7k.json` deleted, stale `GakuranChart_*_candidate.lua` removed (`deploy.py --clean`).
-- [ ] LATER (user request): a FRESH INSTALL of charts. Plan: back up workspace `GakuranCharts` (Charts, Audio,
-      Assets, Scores.json, Settings.json) first, empty Charts/Audio/Assets, then per `.osz`:
-      `python tools/osu2gakuran.py --charts-dir <ws>\GakuranCharts\Charts --audio-dir <ws>\GakuranCharts\Audio
-      --assets-dir <ws>\GakuranCharts\Assets "<osz>"` (ws = `C:\Users\Administrator\AppData\Local\Madium\Workspace`);
-      keep `test_end.json` (28 s test chart, hand-made, not from an .osz). Decide first whether Scores.json stays.
+- [x] FRESH INSTALL of charts done (user: no local scores). `1099026 Laur - Unknown Civilization.osz` (osu!standard,
+      user's mistake) deleted from `FunkyChart_v1.23/`. Whole workspace `GakuranCharts` backed up to
+      `Referencesandmods\_scratch_convert\workspace_gakurancharts_backup_before_fresh_install` (58 files), then Charts/Audio/
+      Assets emptied (kept the hand-made `test_end.json` + `test_end.mp3`), `Scores.json` deleted (Settings.json and Skins
+      kept), and the 8 remaining `.osz` re-converted (30 charts, 9 audio, 8 assets: same counts as before). Verified live:
+      loader 2.0.21 lists and loads 30/30 (lanes 4x13, 5x4, 6x1, 7x12), 9 wheel songs, no Scores.json, 0 score rows.
+- [ ] LATER (user request): find out why some single-difficulty maps do not show their star rating in the wheel
+      (v2.0.10/2.0.11 give `song.difficulty = { [mode] = "★x.xx" }` in `injectSingle`; check which rows lack it:
+      first suspects are the `chart.mode` key vs the wheel's instrument mode, charts that skip `injectSingle`
+      (parents with `not uniform`, non-Keyboard modes), 5K-7K lane charts, and `Kit.tier` word handling).
+      Not investigated yet.
 ### Current task (session 4): import the osu! maps with more than 4 keys as real 4K+ charts
 Goal (user, 2026-10-11): the loader plays 5-7 lanes now (v2.0.19/2.0.20), so import the
 osu! maps that have more than 4 columns as native 4K+ charts instead of 4-lane folds.
