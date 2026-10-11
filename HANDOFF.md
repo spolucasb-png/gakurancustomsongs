@@ -15,12 +15,46 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
-### Current task: none
-The last task (above-4K converter fold) is finished and committed; see "Recent
-work" below and ROADMAP item 4. Before starting the next one (suggestions:
-ROADMAP A4 tier colours, then item 9 quality-of-life), write it here with its
-goal, plan and a progress checklist, and keep this section updated after every
-step (see the protocol above).
+### Current task: v2.0.18 reload hardening (notification errors + wheel-controller scan)
+Goal: stop the console errors after back-to-back reloads and make the wheel
+controller discovery reliable. Found by reproducing on the live client (PID
+14512) with both v2.0.16 and v2.0.17 (identical behaviour):
+- **Rayfield notification errors.** A reload destroys the previous Rayfield GUI
+  while its `Rayfield:Notify` threads (own `task.spawn`, ~5.3 s life) are still
+  sleeping; when they wake, `newNotification.Title` (L1387) / `.Icon` (L1411) are
+  gone -> `X is not a valid member of Frame "Song wheel"`. Count = reloads - 1;
+  reloads >= 8 s apart are clean. Harmless to the new instance (1 GUI, 7 children).
+- **`Wheel controller not found - difficulty picker falls back to overlay`.**
+  `findWheelController` scans `getgc(true)` once at init and the scan is flaky:
+  5 identical scans returned 4,4,0,4,4 matches with nothing changed; seen in
+  ~2 of 10 reloads on v2.0.17 and 2 of 3 on v2.0.16. `armWheelMenu` retries on
+  first use, so the usual result is only the warning, but a miss there too means
+  the overlay instead of the wheel submenu.
+
+Plan (all in `GakuranChart.lua`, candidate first, nothing deployed live):
+1. Load Rayfield through `loadRayfield()`: patch the source IN MEMORY (file on
+   disk untouched) so every `task.wait(...)` statement inside
+   `RayfieldLibrary:Notify` is followed by `if not newNotification.Parent then
+   return end`. Fall back to the unpatched source if the anchors are missing, the
+   patch count is 0 or the patched chunk does not compile.
+2. Init-time wheel scan: up to 3 forced retries 0.25 s apart, aborting if the
+   generation changed (a newer reload took over).
+3. Version 2.0.17 -> 2.0.18 (`VERSION` + header comment).
+
+Progress (update after every step):
+- [x] Reproduced, root-caused, plan agreed with the user.
+- [ ] Patch written and applied (scratch script: `C:\Users\Administrator\_gk_patch\v2_0_18.py`, outside the repo; loader is CRLF).
+- [ ] `python tools/check.py` passes.
+- [ ] Candidate deployed (`python tools/deploy.py --name notifyguard`); tested:
+      back-to-back reloads (expect 0 Icon/Title errors), 8 s-spaced reloads,
+      guard count 6, wheel warning rate over ~10 reloads, `diag()`, 1 GUI left.
+- [ ] Committed; this section moved to "Recent work"; ROADMAP entry added.
+- NOT done on purpose: no `deploy.py --live`; the workspace `GakuranChart.lua`
+  is still v2.0.16 and the live client was running the v2.0.17 candidate.
+
+Noticed, not part of this task: the A4 notes below say tier colours are
+"untouched", but the loader already has `DiffKey`/`DiffTier` hook slots
+(`HK.ensure` calls near L457/L481) - one of the docs is stale; unverified.
 
 ## State
 `GakuranChart.lua` is the single loader, **v2.0.17**. Everything below was
