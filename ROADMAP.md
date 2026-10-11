@@ -338,6 +338,13 @@ parent rows and submenu (A2/A3) and is untouched.
   (quaver end-bulbs want as-is-top, etterna chevrons want flipped-top) —
   verify against the source art, not memory. Tail redeployed, live sanity
   clean (0 errors, taps=3, recs=3).
+- [x] v2.0.28 hit-flash orientation (user: hit effects all-Up): the engine's
+  PlayHitEffect clones a template painted ONCE with the base note image, so
+  flashes ignored per-lane art. Fix: per-frame repaint of live
+  HitFlashTemplate clones with lane-mapped tap art (lane from Position.X via
+  view._laneXs; our shape registers Rotation 0 so the engine's flash rotation
+  is a no-op). Verified by spawning REAL flashes through PlayHitEffect:
+  lane 1 = tap1 hash, lane 4 = tap4 hash, 0 errors. DEPLOYED v2.0.28.
 
 ## Later / future add-ons
 

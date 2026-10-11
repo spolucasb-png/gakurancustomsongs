@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.27
+    GakuranChart v2.0.28
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.27"
+local VERSION = "2.0.28"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -1892,6 +1892,40 @@ local function visApplyFrameInner()
                 local r = (type(recImgs) == "table" and recImgs[lane]) or rest
                 local d = (type(recPImgs) == "table" and recPImgs[lane]) or down
                 paintReceptorImage(view, lane, pressed[lane] and d or r)
+            end
+        end
+    end
+    -- Hit-flash pool clones share the template's base note image (painted once
+    -- at view build, always the Up orientation for directional skins), so the
+    -- flash on lanes 1/2/4 shows the wrong arrow. Clones keep the template
+    -- name; their lane comes from Position.X via view._laneXs. Repaint with
+    -- the lane's tap art (same fallback as notes). Our shape registers
+    -- Rotation 0, so the engine's per-lane flash rotation is a no-op for us.
+    if ss.hasTapVariants then
+        local laneXs = view._laneXs
+        local root = view._contentRoot
+        if type(laneXs) == "table" and typeof(root) == "Instance" then
+            local tapImgsF, headF = ss.tapImgs, ss.head
+            local kids = nil
+            pcall(function() kids = root:GetChildren() end)
+            if type(kids) == "table" then
+                for _, inst in ipairs(kids) do
+                    if inst.Name == "HitFlashTemplate" and inst:IsA("ImageLabel") then
+                        local x = inst.Position.X.Offset
+                        local best, bestD = 1, nil
+                        for i, lx in ipairs(laneXs) do
+                            if type(lx) == "number" then
+                                local d = math.abs(x - lx)
+                                if bestD == nil or d < bestD then best, bestD = i, d end
+                            end
+                        end
+                        local want = (type(tapImgsF) == "table" and tapImgsF[best]) or headF
+                        if inst.Image ~= want then
+                            paintImage(inst, want)
+                            if not visTouched[view] then visTouched[view] = true end
+                        end
+                    end
+                end
             end
         end
     end

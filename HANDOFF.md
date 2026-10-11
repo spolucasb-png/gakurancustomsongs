@@ -93,6 +93,8 @@ Circles skin) and port them into the custom-song script. OSU folder already done
   correct and my swap was the bug. Reverted, tail redeployed (repo +
   workspace hash-matched), live sanity 0 errors. Cap orientation is
   per-skin; note the convention + verification in the converter comment.
+- [x] v2.0.28 hit-flash (user: flashes all-Up): engine template issue +
+  per-frame lane-mapped repaint, verified with real spawned flashes.
 - Repo hygiene lesson (this session): `git add -A` staged 537 untracked
   FunkyChart_v1.23 files into 8bc108d (reset to 14d76c2 with docs only).
   FunkyChart_v1.23/* is now gitignored except FunkyChart.lua. From here on:
