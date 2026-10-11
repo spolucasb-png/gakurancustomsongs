@@ -187,8 +187,17 @@ def parse_timing(sections: dict):
         elif bl < 0:
             svs.append((t, -100.0 / bl))
     reds.sort()
-    svs.sort()
-    return reds, svs
+    # Time sort must be STABLE (file order kept for ties): a later same-time
+    # point overrides an earlier one, in osu! as in Quaver. A plain tuple
+    # sort would order ties by multiplier value and the wrong rate would win.
+    svs.sort(key=lambda p: p[0])
+    deduped = []
+    for t, m in svs:
+        if deduped and deduped[-1][0] == t:
+            deduped[-1] = (t, m)  # last in file wins
+        else:
+            deduped.append((t, m))
+    return reds, deduped
 
 
 def sv_at(svs, time_ms: float) -> float:
@@ -450,13 +459,18 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
     # rate = -100 / beatLength (osu!mania convention). Stored on the same
     # fixed reference-BPM beat axis as the notes, so the loader's
     # t = startAt + 60/bpm * b lands them on the exact osu! ms axis.
-    # Consecutive equal rates collapse into a single boundary.
+    # Same grid instant twice (same ms, or distinct ms rounding to one beat):
+    # last in file wins, like the game. Consecutive equal rates collapse.
     scroll_changes = []
     for t_ms, mult in svs:
         r = round(max(0.05, min(20.0, mult)), 4)
-        if scroll_changes and abs(scroll_changes[-1]["rate"] - r) < 1e-9:
+        b = round(t_ms / ref_bl, 4)
+        if scroll_changes and scroll_changes[-1]["b"] == b:
+            scroll_changes[-1] = {"b": b, "rate": r}
+        elif scroll_changes and abs(scroll_changes[-1]["rate"] - r) < 1e-9:
             continue
-        scroll_changes.append({"b": round(t_ms / ref_bl, 4), "rate": r})
+        else:
+            scroll_changes.append({"b": b, "rate": r})
 
     duration = max(n["b"] + n["d"] for n in notes) * 60.0 / ref_bpm
 

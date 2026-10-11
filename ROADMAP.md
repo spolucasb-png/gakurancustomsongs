@@ -381,12 +381,22 @@ parent rows and submenu (A2/A3) and is untouched.
   under real-Quaver semantics 0% are on the wrong side of the receptor.
 - Known converter bug (open): 3 same-time SV pairs where Quaver takes the
   last-in-file value but the converter's `sort()` reverses the order.
-- Open: negative/zero/extreme-rate preservation policy (loader capability
-  unchecked — do NOT touch the clamp blind, it is load-bearing for
-  stability), beat/rate rounding as error sources. Next: fix same-time
-  ordering, re-convert to a workspace candidate, live-verify via `svStatus()`
-  + eyeball before deploying. Scratch: `_gk_patch/qua_sv_stats.py`,
-  `_gk_patch/qua_sv_sim.py` (outside the repo).
+- [x] Same-time fix DONE + VERIFIED live (client 14512, v2.0.29, data-only
+  change so no loader bump): both converters stable-sort SV by time and
+  collapse each grid instant (same ms, or distinct ms rounding to one beat —
+  55 groups on ball_hard, mostly 0.016 ms spike pairs) to last-in-file.
+  Output strictly increasing, zero collisions, notes intact; workspace
+  ball_hard 8468→8407 pts, bozo 6656→6386 pts (halloween byte-identical).
+  Live: both play, models build (8382/6332 pts), 0 errors, scores cleared.
+- Open: negative/zero/extreme-rate preservation policy. Loader limits
+  checked (`buildSvModel` is the only scrollChanges consumer): drops r<=0,
+  clamps [0.05,20], same-t order nondeterministic (moot for converted charts
+  now), spawn inversion needs strictly increasing I, spawn-order proof needs
+  rate>0, zero rate would divide by zero. Frame positioning has no such
+  limit. Full support = replace inversion with a bounded earliest-visible
+  forward scan; judging never touches SV so worst case is visual only.
+  Next: policy decision + dedicated live-verification round. Scratch:
+  `_gk_patch/qua_sv_stats.py`, `_gk_patch/qua_sv_sim.py` (outside the repo).
 
 ## Later / future add-ons
 

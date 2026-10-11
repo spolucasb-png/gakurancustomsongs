@@ -148,12 +148,19 @@ def convert_file(qua_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
     ]
     scroll_changes = []
     svs = sorted(((fnum(i.get("StartTime")), fnum(i.get("Multiplier"), 1.0))
-                  for i in lists["SliderVelocities"]))
+                  for i in lists["SliderVelocities"]), key=lambda p: p[0])
     for t_ms, mult in svs:
         r = round(max(0.05, min(20.0, mult)), 4)
-        if scroll_changes and abs(scroll_changes[-1]["rate"] - r) < 1e-9:
-            continue
-        scroll_changes.append({"b": round(t_ms / ref_bl, 4), "rate": r})
+        b = round(t_ms / ref_bl, 4)
+        if scroll_changes and scroll_changes[-1]["b"] == b:
+            # Same grid instant: identical ms, or distinct ms values rounding
+            # to one beat (sub-0.03 ms apart — unrepresentable on our axis).
+            # Quaver plays the LAST one in file order, so it wins.
+            scroll_changes[-1] = {"b": b, "rate": r}
+        elif scroll_changes and abs(scroll_changes[-1]["rate"] - r) < 1e-9:
+            continue  # consecutive equal rates: one boundary suffices
+        else:
+            scroll_changes.append({"b": b, "rate": r})
 
     duration = max(n["b"] + n["d"] for n in notes) * 60.0 / ref_bpm
     mode = scalars.get("Mode", "Keys4")

@@ -53,6 +53,32 @@ do not re-run blindly): `C:\Users\Administrator\_gk_patch\qua_sv_stats.py`
   shares the pattern), re-convert ball_hard to a workspace candidate, and
   live-verify on client 14512 with `svStatus()` + on-screen eyeball before
   touching the deployed charts.
+- [x] Same-time fix DONE + VERIFIED (no loader change, so no version bump):
+  both converters now stable-sort SV by time and collapse each grid instant
+  (same ms, or distinct ms rounding to one 4-decimal beat — 55 such groups on
+  ball_hard alone, mostly 0.016 ms spike pairs) to the last-in-file value,
+  which is what Quaver plays. osu shares the tuple-sort pattern and got the
+  same fix in `parse_timing` + its scroll loop. check.py 16/16, fold tests
+  10/10. Fresh output strictly increasing, zero same-beat collisions,
+  note counts intact; non-SV chart fields byte-identical.
+- [x] Workspace charts rewritten (backup of the 3 files in
+  `_scratch_convert\workspace_charts_backup_before_svorder`; halloween
+  byte-identical, untouched): ball_hard 8468→8407 pts, bozo 6656→6386 pts.
+  Live on client 14512 (v2.0.29): both load, both play, SV models build
+  (8382 / 6332 pts after the loader's own equal-rate dedupe), 0 errors;
+  scores cleared (0 rows), instrument restored to nil.
+- Loader limits checked for the preservation policy (all in `GakuranChart.lua`,
+  scrollChanges has ONE consumer, `buildSvModel`): (L1) drops r<=0 + clamps
+  [0.05,20]; (L2) same-t order nondeterministic (Lua unstable sort + 1e-6
+  dedupe) — now moot for converted charts, still live for hand-made ones;
+  (L3) `svInvertIntegral` needs strictly increasing I; (L4) spawn-order proof
+  needs rate>0; (L5) zero rate would divide by zero in the invert. Frame
+  positioning (`svIntegral` differences) has NO such limit — negatives would
+  render as reversed motion fine. So full negative support = replace
+  inversion with a bounded earliest-visible-time forward scan + keep
+  negatives/zeros in the model; judging never touches SV (time-based), worst
+  case of a naive change is visual pop-in + pool pressure, never a crash.
+  NOT started — needs its own policy decision + live verification round.
 
 ### DONE (session 9): hit flash / hit ring orientation fixed in v2.0.29 (user approved 15:57)
 No current task is open from this session. DEPLOYED v2.0.29, workspace == repo.
