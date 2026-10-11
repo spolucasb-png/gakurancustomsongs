@@ -44,9 +44,8 @@ Plan / progress (update after every step):
             offline logic test 29/29, live install + 7K play verified (work log)
       - [ ] hit-bot judging check with lanes 5-7 (first run was inconclusive)
       - [ ] look at it on screen (user), SV / skin passes with 7 lanes, then commit
-        THE LOADER CHANGE IS UNCOMMITTED in the working tree (v2.0.19, +272/-5 lines);
-        regenerate/inspect with `git diff`; the patch script is
-        `_scratch_convert\patch_4k_loader.py` (already applied, do not re-run).
+        THE LOADER CHANGE IS NOW COMMITTED (v2.0.19 = `c8aa67f`, v2.0.20 lane-pitch fix = `c9cb719`);
+        the patch script `_scratch_convert\patch_4k_loader.py` is already applied, do not re-run.
 - [ ] Rayfield "Keys (4K+)" page: per-lane-count key binding (5K, 6K, 7K...), saved
       in Settings.json. Later, optionally, the game's own settings page (see below).
 - [ ] Converter: stop folding when the loader supports the lane count (`--no-fold`
@@ -138,6 +137,26 @@ Plan / progress (update after every step):
   * Scratch left behind (delete when done): workspace `GakuranCharts\Charts\__test_7k.json`
     (the wheel lists it: "8 custom charts") and `GakuranChart_4k_candidate.lua`.
   * The deployed `GakuranChart.lua` (v2.0.18) was not touched.
+- 2026-10-11 session 3 (committed `c8aa67f` = v2.0.19 loader, then `c9cb719` = v2.0.20):
+  * Checked first: `tools/check.py` 7/7, `test_4k_logic.py` 29/29, then committed v2.0.19. Live client
+    14512: probe inactive, 12 hooks installed; the results screen the user mentioned was ALREADY gone
+    (`_resultsScreen._destroyed == true`, Backdrop unparented, no session/view; the service just keeps
+    the stale reference), so no input was sent.
+  * BUG (user report: "gap lane ... so close, mid-overlapping other lanes"): the view spreads a FIXED
+    width (`LanesFrame.X * LANE_SPACING_MULTIPLIER(0.3) * laneSpacing`) over the lane count
+    (RhythmView `_refreshColumns`, `v81 = v80 / _laneCount`), but notes keep their size. The earlier 7K
+    run had pitch 76.7 px (764..1224) against 108 px notes = neighbours overlapped by ~30 px.
+  * FIX v2.0.20: new hook slot `ViewNew` on `RhythmView.new` (found by `GC.viewClass`: `new` +
+    `GetLaneXAt` + `SetLaneSpacing`); for lanes > 4 it multiplies the `laneSpacing` argument (6th arg)
+    by lanes/4 so the pitch equals 4K's, capped at 3.0 (never reduces a user value already above it).
+    Cosmetic only: a missing view class warns and plays still work. Listed in `HK.restore` and `diag()`.
+    Offline test now 41/41 (12 new `view:` checks). Run live as candidate `GakuranChart_4k20_candidate.lua`
+    (gen 61): 13 hooks all installed, no stacking, `diag()` clean. 7K throwaway chart: `_laneSpacingScale`
+    1.575 (user 0.9 x 7/4), lane x 591 726 860 994 1128 1262 1397 (pitch 134-135 px), receptor 108 px,
+    so a 26 px gap instead of a 30 px overlap; `G.stop()` left no session/view/instrument, vis errors 0.
+  * STILL NOT verified: how it looks on screen (user to eyeball), perspective mode (the same factor
+    scales the board width, untested), hit-bot judging with lanes 5-7, SV/skin passes with 7 lanes.
+  * v2.0.20 is NOT deployed to the live `GakuranChart.lua`; only the candidate is running in the client.
 
 ### Findings (live decompile, 2026-10-11) - 4K+ is an engine-supported shape
 - `RhythmChartUtil.getLaneCount(mode)` is hard-coded (Guitar/RhythmGuitar 2, else 4)
@@ -281,7 +300,9 @@ Recent work, newest first:
   hook list before building anything, then fix whichever doc is stale.
 - v2.0.18: the wheel-scan retry is not proven to fire (0 warnings in 10 reloads vs
   roughly 20-67% before is consistent with it, but nothing was instrumented). The
-  wheel submenu, play and stop were not re-run on 2.0.18, and it is not deployed live.
+  wheel submenu, play and stop were not re-run on 2.0.18. (2.0.18 WAS deployed live
+  earlier today; the live `GakuranChart.lua` is still 2.0.18, 2.0.19/2.0.20 exist only as
+  committed source plus the candidate files in the workspace.)
 - Folded >4K charts have not been played in-game; the user should try one (for
   example `set304864_5k_*` from the "-+" maps or `ievan_polkka_7k_*`) and judge
   the feel. If a fold choice feels wrong, the knobs are `FOLD_MIN_GAP_MS` and the
