@@ -26,7 +26,7 @@ Plan / progress (update after every step):
 - [x] Back up the deployed v2.0.16 loader, `python tools/deploy.py --live` (v2.0.18). Done.
 - [x] Read-only research in the live client (client 14512): the engine is
       lane-count-generic, so real 4K+ looks feasible. Findings below. NOT tested.
-- [ ] (IN PROGRESS, started 2026-10-11, user approved the whole plan) Probe with a throwaway Luau script (no loader change) whether a >4-lane
+- [x] (DONE 2026-10-11, results in the work log) Probe with a throwaway Luau script (no loader change) whether a >4-lane
       session starts and plays: wrap `RhythmChartUtil.resolvePlayable`, set
       `playable.lanes = 7` + a key map, `StartPlay` a 7K chart, watch for errors.
 - [ ] Loader: `lanes` + `keyMapOverride` on our song, a theme for N lanes, hint
@@ -42,6 +42,31 @@ Plan / progress (update after every step):
   (outside the repo, run with `run_executor_file` or `execute_luau`). The probe only
   touches module tables / a synthetic song guarded in `GakuranChartHookBase.ids`, and
   must restore every wrapper it installs. Results get appended here.
+
+- 2026-10-11 probe RESULT (client 14512, loader 2.0.18, default skin): a synthetic 7K song
+  (40 notes, 2 holds, keys A S D Space J K L) played through a real `StartPlay` with ONLY
+  two temporary wrappers: `RhythmChartUtil.resolvePlayable` (sets `playable.lanes` from
+  `song.gakuranLanes`) and `RhythmThemeSettings.StoredToViewTheme` (for n > 4 it passes a
+  copy of the stored theme whose `noteIn4/noteOut4/recBorder4/recPress4` are cycled up to
+  n entries). Observed: no error from `StartPlay`, `sess._lanes == 7`, `view._laneCount == 7`,
+  `view:GetLaneXAt(1..7)` spans 764..1224 px, notes spawned on lanes 1,2 in order, the
+  engine key map is exactly `A=1 S=2 D=3 Space=4 J=5 K=6 L=7` (hint lists also carry the
+  controller buttons for lanes 1-4), perspective off, the song ran to its natural end and
+  the results screen appeared, no warn/error lines in the console, loader `diag()` still
+  "all getgc targets found", `visStatus().errors == 0` (skin was the game default, so the
+  skin pass wrote nothing: NOT a test of skins with 7 lanes).
+  NOT verified: how it looks on screen (lane width, hold bodies, hint labels, judgement
+  line), physical key presses / judging with 5+ lanes (I did not press keys; no hits were
+  judged), SV pass and skin pass with 7 lanes, stats/results contents, perspective mode.
+  Probe scripts: `_scratch_convert\probe4k_start.lua` (cleaned copy of the inline script;
+  the asset-function name inside it is unverified). The probe's wrappers, the guarded
+  synthetic song `__probe4k_7k` and the temporary `PlayingInstrument=Keyboard` attribute
+  are restored by a watcher inside the client ONLY after the results screen is dismissed
+  (restoring earlier would kill it). If this session was cut off, check
+  `_G.__probe4k` in the client: `.active == true` means cleanup has NOT run; run
+  `for i = #P.restore, 1, -1 do pcall(P.restore[i]) end; P.active = false` once
+  `service._session/_view/_resultsScreen` are all nil. A re-exec of the loader does not
+  clear it.
 
 ### Findings (live decompile, 2026-10-11) - 4K+ is an engine-supported shape
 - `RhythmChartUtil.getLaneCount(mode)` is hard-coded (Guitar/RhythmGuitar 2, else 4)
