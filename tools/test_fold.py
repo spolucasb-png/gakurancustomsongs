@@ -137,6 +137,28 @@ def test_seven_key_integration():
     assert taps == sorted(taps), taps
 
 
+def test_convert_file_10k_end_to_end():
+    # Regression for the old min(7, keys) clamp: a 10K map must be read as 10K.
+    import contextlib
+    import io
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        objs = [(1, 0, None), (5, 1000, None), (6, 2000, None), (10, 3000, None), (8, 4000, 4600)]
+        (d / "m.osu").write_text(osu_text(10, objs), encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            chart = C.convert_file(d / "m.osu", d / "c", d / "a", d / "s", copy_audio=False)
+        assert chart is not None and chart["sourceKeys"] == 10, chart and chart.get("sourceKeys")
+        assert chart["fold"]["from"] == 10 and chart["fold"]["to"] == 4 and chart["fold"]["dropped"] == 0
+        by_t = {round(n["b"] * 500): n["l"] for n in chart["charts"]["Keyboard"]}
+        assert by_t[0] == 1 and by_t[1000] == 2 and by_t[2000] == 3 and by_t[3000] == 4, by_t
+        assert "folded 10K->4 lanes" in chart["charter"], chart["charter"]
+        assert (d / "c" / f"{chart['id']}.json").exists()
+        # --no-fold behaviour: skipped, exactly like before
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            assert C.convert_file(d / "m.osu", d / "c2", d / "a", d / "s", copy_audio=False, fold_keys=False) is None
+
+
 def main():
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

@@ -48,7 +48,7 @@ Order: A1.5, then A1, A2, A3. A1 is Python-only and cannot regress the loader, s
 - [x] **A2. Loader grouping:** build one parent song per `songId` (difficulties inside); registered through the existing ledger so cleanup/restore stays identity-based.
 - [x] **A3. `StartPlay` wrapper + overlay:** new HookBase slot, bypass flag, overlay, synchronous swap. Full live test before commit: re-exec zero growth, ledger, hook restore, play/stop, click from main and search rows, results screen.
 - [ ] **A4. (Optional, separate commit) Tier colours:** hook `RhythmDifficulty.Key`.
-- [ ] **B. Above-4K (step 4 below):** fold 5K/7K to 4 lanes in the converter (or warn); the fold rule is per map, so it yields a different chart per difficulty. Right after A1, since both change the converter.
+- [x] **B. Above-4K (step 4 below):** DONE (`a47ae1d`), see item 4. 5K-18K maps are folded to 4 lanes in the converter; the fold is per map, so each difficulty gets its own chart.
 
 ### Still to probe at implementation (all quick)
 - What the wheel does when `StartPlay` is swallowed (it still calls `Close()`); confirm it assumes no session/state.
@@ -80,11 +80,36 @@ Order: A1.5, then A1, A2, A3. A1 is Python-only and cannot regress the loader, s
 - Caveat: `SubmitStats`/`QueryJamSync` bogus-id probes matched the guards' return values but were not independently decisive; their wrappers share the verified structure.
 - Live test had to cover: several re-executions, Stop, hooks not stacking, and custom ids still neutralized after a restore.
 
-### 4. Converter vs loader key-count mismatch (scheduled right after multi-difficulty A1)
+### 4. Converter vs loader key-count mismatch — DONE (fold, `a47ae1d`)
 - Engine fact: `getLaneCount` is fixed per mode (Guitar/RhythmGuitar 2, all others 4), so lanes can't be added; fold or warn.
 - `osu2gakuran.py` clamps keys to 1-7; the loader drops lanes above 4 (above 2 for Guitar), so 5K/7K maps silently lose notes.
-- [ ] Check how the converter handles >4 keys (Python only, no game needed).
-- [ ] Either fold/merge columns to 4 or warn at convert time.
+- [x] Checked how the converter handled >4 keys: by then it already skipped them
+  with a warning (`--allow-lossy-keys` was the only way through, and then the
+  loader dropped lanes 5+). It also clamped keys to 7, which mis-placed the
+  columns of 8K+ maps (x is encoded for the real column count). Clamp is now 18.
+- [x] **Fold, not warn.** `fold_columns()` in `tools/osu2gakuran.py` folds 5K-18K
+  mania maps to the instrument's lane count (4 for Keyboard), so they play in
+  the game's normal system with no loader change. One exact integer rule: each
+  column goes to the lane it overlaps most; an exact tie (centre column of
+  5K/7K/9K, columns 2 and 5 of 6K) is resolved to the least recently used free
+  lane. A lane is busy until a hold's end or a note plus 25 ms; leftovers on a
+  busy lane are rerouted to the nearest free lane (holds before taps) and an
+  object is dropped only when all lanes are busy. Duplicate (time, column)
+  objects are merged. Default for keys > lanes; `--no-fold` restores the old
+  skip, `--allow-lossy-keys` stays the legacy lossy path. Charts get an
+  additive `fold` object (from/to/source/kept/rerouted/dropped/droppedHolds/
+  duplicates), `sourceKeys` keeps the original count and `charter` notes the fold.
+- Verified: `python tools/test_fold.py` (9 offline tests: exact shapes and
+  mirror symmetry for 3-18 keys, no lane overlap on random maps, hold lengths
+  kept, deterministic, <=4K path untouched, 10K end to end). On real maps
+  (5K "-+" x4, 7K Ievan Polkka x2): 0-3 objects dropped per map out of
+  350-1,140 (1 of 985 on 7K), no overlaps, lanes balanced, and the live loader's
+  `load()` accepted them (348/348 and 984/984 notes, lanes 1-4, nothing
+  dropped by validation). Charts of <=4K are byte-identical to the previous
+  converter except `rank`, which is relative to the other charts in the run.
+- Not verified: no folded chart has been played in-game yet (feel is the user's
+  call), and 6K and 8K+ are covered by synthetic tests only (the one 6K file on
+  disk is an empty stub).
 
 ### 5. Small fixes — DONE (v2.0.12, all six verified live)
 - [x] Sort notes by `b` in `readChart`. Strict weak ordering (beat, then lane) so

@@ -15,49 +15,26 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
-### Current task: above-4K converter fold (ROADMAP item 4 / B)
-Goal: let osu!mania maps with 5-10 keys be converted to playable 4-lane Gakuran
-charts without changing the game's system (lane count is fixed per instrument:
-Keyboard/Bass/Drums 4, Guitar 2). Today `tools/osu2gakuran.py` skips >4K maps
-(`--allow-lossy-keys` converts them but the loader drops lanes above 4).
-Python-only; do not touch `GakuranChart.lua` for this.
-
-Progress:
-- [x] Found that the converter already skips >4K with a warning (not silent loss).
-- [x] Studied `convert_hitobjects` / `convert_file` (only caller of the former is `convert_file`).
-- [x] Implemented `column_lanes()` / `fold_columns()` in `tools/osu2gakuran.py` + hook into `convert_hitobjects` (patch script: `C:\Users\Administrator\_gk_patch\patch_fold.py`, already applied, do NOT re-run).
-- [x] `tools/test_fold.py`: 8/8 pass (`python tools/test_fold.py`).
-- [x] CLI: fold is the default for keys > lanes; `--no-fold` restores the old skip; `--allow-lossy-keys` stays legacy.
-- [x] Chart JSON: additive `fold` object (from/to/source/kept/rerouted/dropped/droppedHolds/duplicates); `sourceKeys` stays the original count; `charter` gets ", folded 7K->4 lanes".
-- [ ] Run on real maps (list below), eyeball stats, `python tools/check.py`.
-- [ ] Commit; update ROADMAP (item 4 / B) and this file. Loader is NOT changed.
-
-Decisions / findings:
-- Existing bug: `keys = max(1, min(7, keys))` mis-computes columns for 8K-10K
-  (x is encoded for the real key count). Clamp becomes 1..18; <=7K unchanged.
-- Fold rule (one exact rule, integer math): column c of k spans [(c-1)N, cN) in
-  units of 1/k, lane j spans [jk, (j+1)k). Natural lane = largest overlap; an
-  exact tie (e.g. 5K centre, 7K centre, 6K cols 2/5) means two candidate lanes,
-  resolved dynamically toward the least recently used free lane.
-- Conflicts: chronological pass; a lane is busy until a hold's end (or a tap's
-  time) plus FOLD_MIN_GAP_MS. Per same-time group: natural lanes first, then
-  reroute leftovers to the nearest free lane (holds before taps), and drop only
-  if all lanes are busy. Counts are reported and stored in the chart.
-- Output stays mode "Keyboard" with lanes 1..4, so the loader/engine are untouched.
-- Test maps on disk (all osu!mania): `..\_scratch_convert\extract\304864\` (5K
-  maps of "-+"), `..\_scratch_convert\extract\993703\` (Ievan Polkka 7K NSV/SV),
-  `..\madium\Workspace\afn_charts\2FAR_Hard_ALT_057_233.osu` (6K).
-  Convert into a TEMP dir, never into the real GakuranCharts folder.
-- Line endings: `tools/*.py` and `*.md` are LF in git, but the working copies
-  were CRLF; `GakuranChart.lua` is CRLF in the index. A patch script that
-  preserves CRLF on a LF blob makes git show the whole file as changed - write
-  the same EOL as the committed blob (`git ls-files --eol <file>`).
+### Current task: none
+The last task (above-4K converter fold) is finished and committed; see "Recent
+work" below and ROADMAP item 4. Before starting the next one (suggestions:
+ROADMAP A4 tier colours, then item 9 quality-of-life), write it here with its
+goal, plan and a progress checklist, and keep this section updated after every
+step (see the protocol above).
 
 ## State
 `GakuranChart.lua` is the single loader, **v2.0.17**. Everything below was
 verified live on placeVersion 7646 (Madium 2.0.0) before being committed.
 
 Recent work, newest first:
+- **Above-4K converter fold (ROADMAP 4 / B), `tools/osu2gakuran.py` only, loader
+  untouched.** 5K-18K mania maps are folded to 4 lanes (`fold_columns`, exact
+  overlap rule, busy-lane rerouting, drops only when all lanes are busy; adds
+  `fold` + keeps `sourceKeys` in the chart JSON). Default on; `--no-fold` skips
+  such maps; also fixes the old min(7, keys) clamp (now 18). `python
+  tools/test_fold.py` = 9 offline tests. Real maps (5K x4, 7K x2) convert with
+  0-3 dropped objects each and load in the live loader. NOT played in-game yet,
+  and 6K / 8K+ are synthetic-tested only.
 - **v2.0.17 — Rayfield chart list is one row per song.** A "Difficulty" dropdown
   appears only for multi-difficulty songs (ROADMAP 8c).
 - **v2.0.16 — local scores** in `GakuranCharts/Scores.json` (ROADMAP 8).
@@ -77,6 +54,11 @@ Recent work, newest first:
   `SKINS_DIR`) plus the converter's chart-id collision fix.
 
 ## Workflow
+- **Line endings differ per file** (all files are `-text`, bytes are stored as
+  is): `GakuranChart.lua`, `README.md`, `ROADMAP.md` are CRLF in git; `HANDOFF.md`
+  and `tools/*.py` are LF. Check `git ls-files --eol <file>` before writing a
+  patch script and write the same EOL, or git shows the whole file as changed.
+  `git diff --stat` after an edit should show only the lines you meant to touch.
 - **Always `python tools/check.py` (or `tools/deploy.py`, which runs it) before
   deploying.** It parse-checks the loader offline with the `luau` CLI, compiles
   the Python tools and validates chart/skin JSON. `rokit add --global
@@ -106,8 +88,12 @@ Recent work, newest first:
 - `SubmitStats` args 3 and 4 are still unidentified - they were 0/nil on a
   capture run that took no input. Identify them from a played run before local
   scores relies on them (ROADMAP 8 has the full captured shape).
-- Tier colours (A4) are untouched. The `>4K` fold (ROADMAP B) is in progress,
-  see "Current task" at the top.
+- Tier colours (A4) are untouched.
+- Folded >4K charts have not been played in-game; the user should try one (for
+  example `set304864_5k_*` from the "-+" maps or `ievan_polkka_7k_*`) and judge
+  the feel. If a fold choice feels wrong, the knobs are `FOLD_MIN_GAP_MS` and the
+  tie-break in `fold_columns` (`tools/osu2gakuran.py`); `tools/test_fold.py` must
+  keep passing.
 - Repo hygiene is done (history rewritten, `.git` ~391 KB, `.gitattributes`
   added). `_gk_backup/gakuran-pre-cleanup-*.bundle` still holds the full old
   history; the user deletes it when satisfied.

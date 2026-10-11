@@ -57,7 +57,15 @@ python tools/osu2gakuran.py "map.osz" ^
   --assets-dir <workspace>/GakuranCharts/Assets
 ```
 
-- osu!mania (Mode 3) maps convert exactly (columns → lanes).
+- osu!mania (Mode 3) maps with 4 keys or fewer convert exactly (columns → lanes).
+- osu!mania maps with more keys than the instrument has lanes (5K-18K for the
+  4-lane Keyboard) are **folded** down to the lane count, so they play in the
+  game's normal system. Each column goes to the lane it overlaps most, the
+  centre column of odd key counts alternates between the two middle lanes, and
+  a note that would land on a busy lane (a hold, or another note within 25 ms)
+  is moved to the nearest free lane. A note is dropped only when every lane is
+  busy, which is rare: the converter prints the counts and stores them in the
+  chart's `fold` field. `--no-fold` skips such maps instead.
 - osu!standard sliders become approximate holds; spinners are skipped.
 - Audio and background image are copied automatically.
 
