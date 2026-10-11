@@ -41,6 +41,8 @@ Research is read-only: decompiles of the live game (`RhythmDifficulty`, `RhythmC
 6. **Tier colours** for custom names via a `Key` hook: later, separate commit.
 
 ### Plan
+Order: A1.5, then A1, A2, A3. A1 is Python-only and cannot regress the loader, so doing it second costs nothing; A1.5 first de-risks the additive-slot pattern that A3 depends on.
+- [ ] **A1.5. "Customs only" wheel filter (do first; dry run for the additive HookBase slot):** Rayfield toggle persisted in `Settings.json`; one new slot in the existing HookBase v2 table wrapping `ListPlayableSongInfosForHeld` (module table method, same restore-only-if-ours discipline). ON: return a **new** array holding only entries whose registry song is ledger-owned (`owned[_byId[id]]`, never an id pattern); OFF: return the game's array untouched. Requires the existing "show custom songs in the wheel" option (force it on or grey the toggle out). If the filtered result is empty, fire a one-time notice from the hook. Takes effect on the next wheel open (`_refreshSongs` is called only from `Open`, L3157; rows and search both read `_songEntries`). Forward-compatible with parent rows. Callers verified: wheel `_refreshSongs` (L716) and `RhythmWheelPreview` (L98, hard-coded "Keyboard", first 8 sorted). `ListSongIds`/`ListSongInfos` have no client callers (1,324 scripts scanned). **Live test:** toggle on -> open wheel -> customs only; preview shows customs or an empty list without error; toggle off -> everything back; re-exec zero growth; hook restored on cleanup and on UI-failure rollback; search works inside the filtered list.
 - [ ] **A1. Converter + format (Python, additive):** `songId`, `tier`, `rank`; per-song media dedupe (by content); non-mania flagging; old charts and old converter output keep working.
 - [ ] **A2. Loader grouping:** build one parent song per `songId` (difficulties inside); registered through the existing ledger so cleanup/restore stays identity-based.
 - [ ] **A3. `StartPlay` wrapper + overlay:** new HookBase slot, bypass flag, overlay, synchronous swap. Full live test before commit: re-exec zero growth, ledger, hook restore, play/stop, click from main and search rows, results screen.
@@ -52,6 +54,7 @@ Research is read-only: decompiles of the live game (`RhythmDifficulty`, `RhythmC
 - Search-row path (`_selectSong`) behaves the same as main rows.
 - Which difficulty the parent row's label and duration reflect.
 - Hook slot: no stacking across re-execs, restore only while ours is installed.
+
 ## Do in order
 
 ### 1. Baseline (read-only)
