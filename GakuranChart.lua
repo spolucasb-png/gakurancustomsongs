@@ -299,6 +299,41 @@ if relayMod then
     HK.ensure("FireStart", relayMod, "FireStart", HK.makeFire)
 end
 
+-- Optional "customs only" song-wheel filter. Same ownership discipline, but
+-- this one reads instead of blocking: when the flag is on it returns a NEW
+-- array holding only ledger-owned songs, otherwise the game's array passes
+-- through untouched. The wrapper closes over its base record only (plus _G
+-- at call time) - never chunk-local settings or the ledger local - so it
+-- stays correct across re-executions. Toggle state lives on the record
+-- (b.customsOnly), synced from settings at startup and by the UI toggle.
+function HK.makeSongFilter(b)
+    return function(self, mode, ...)
+        local list = b.under(self, mode, ...)
+        if type(list) ~= "table" then return list end
+        if not b.customsOnly then return list end
+        -- Fail open: if the registry or ledger can't be read, show
+        -- everything rather than an empty wheel.
+        local okR, reg = pcall(function() return b.mod._registry end)
+        local byId = (okR and type(reg) == "table") and reg._byId or nil
+        local lg = _G.GakuranChartLedger
+        local owned = (type(lg) == "table" and lg.owned) or nil
+        if type(byId) ~= "table" or type(owned) ~= "table" then return list end
+        local out = {}
+        for _, info in ipairs(list) do
+            local song = (type(info) == "table" and byId[info.id]) or nil
+            if type(song) == "table" and owned[song] then out[#out + 1] = info end
+        end
+        if #out == 0 and not b.emptyNoticed then
+            b.emptyNoticed = true
+            -- notify() is declared further down; warn directly so this
+            -- wrapper never depends on a not-yet-declared local.
+            pcall(warn, "[GakuranChart] Song wheel: customs-only filter is on, but no custom songs are listed for this instrument")
+        end
+        return out
+    end
+end
+HK.ensure("ListPlayableSongInfosForHeld", service, "ListPlayableSongInfosForHeld", HK.makeSongFilter)
+
 ----------------------------------------------------------------
 -- 2. Settings persistence
 ----------------------------------------------------------------
@@ -308,6 +343,7 @@ local settings = {
     bgColor = { 0, 0, 0 },
     bgTransparency = 0,
     showInWheel = false,
+    customsOnly = false,   -- song wheel shows only custom songs (needs showInWheel)
     skin = "",   -- selected osu!mania skin pack name ("" = game default)
 }
 
@@ -329,6 +365,18 @@ for _, dir in ipairs({ FOLDER, CHARTS_DIR, AUDIO_DIR, ASSETS_DIR }) do
     if not fn.isfolder(dir) then pcall(fn.makefolder, dir) end
 end
 loadSettings()
+
+-- "Customs only" needs customs listed: force showInWheel on (the toggles
+-- below keep the two consistent at runtime the same way). The filter flag
+-- on the shared hook record follows settings, not the other way round.
+if settings.customsOnly and not settings.showInWheel then
+    settings.showInWheel = true
+    saveSettings()
+end
+do
+    local b = hookBase["ListPlayableSongInfosForHeld"]
+    if type(b) == "table" then b.customsOnly = settings.customsOnly == true end
+end
 
 ----------------------------------------------------------------
 -- 3. Chart loading
@@ -1649,16 +1697,18 @@ local function removeInjectedSongs()
     end
 end
 
--- Put the game's original SubmitStats / QueryJamSync / FireStart back, but only
--- where our wrapper is still the installed function (never clobber a wrapper
--- someone else put on top of ours). If another component wraps ours, we stay
--- in its chain and the guard set is kept. Returns true once no wrapper of ours
--- remains installed (then the guard set is cleared, so nothing stale lingers).
+-- Put the game's originals back, but only where our wrapper is still the
+-- installed function (never clobber a wrapper someone else put on top of
+-- ours). Covers SubmitStats / QueryJamSync / FireStart and the song-wheel
+-- filter (restoring that one just un-filters the wheel). If another
+-- component wraps ours, we stay in its chain and the guard set is kept.
+-- Returns true once no wrapper of ours remains installed (then the guard
+-- set is cleared, so nothing stale lingers).
 function HK.restore()
     local base = _G.GakuranChartHookBase
     if type(base) ~= "table" or base.version ~= HOOK_BASE_VERSION then return true end
     local allGone = true
-    for _, name in ipairs({ "SubmitStats", "QueryJamSync", "FireStart" }) do
+    for _, name in ipairs({ "SubmitStats", "QueryJamSync", "FireStart", "ListPlayableSongInfosForHeld" }) do
         local b = base[name]
         if type(b) == "table" and type(b.mod) == "table" and type(b.wrap) == "function" then
             local cur = b.mod[b.key]
@@ -2038,12 +2088,27 @@ TabOpt:CreateColorPicker({
 })
 
 TabOpt:CreateSection("Integration")
-TabOpt:CreateToggle({
+-- Forward-declared so the two wheel toggles can sync each other: enabling
+-- "customs only" forces listing on, and turning listing off also turns the
+-- filter off (without listed customs it would only ever show an empty wheel).
+-- ToggleSettings:Set() updates the visual AND runs the callback, so syncing
+-- through Set never duplicates logic and can never recurse (neither callback
+-- re-triggers the other in the same direction).
+local showWheelToggle, customsOnlyToggle = nil, nil
+showWheelToggle = TabOpt:CreateToggle({
     Name = "Show custom songs in the song wheel",
     CurrentValue = settings.showInWheel or false,
     Callback = function(value)
         settings.showInWheel = value
         saveSettings()
+        if not value and settings.customsOnly then
+            settings.customsOnly = false
+            saveSettings()
+            local b = hookBase["ListPlayableSongInfosForHeld"]
+            if type(b) == "table" then b.customsOnly = false end
+            if customsOnlyToggle then pcall(function() customsOnlyToggle:Set(false) end) end
+            notify("Song wheel", "Customs-only filter turned off (no customs listed)")
+        end
         local okI, errI = pcall(function()
             if value then
                 local n = injectAllCharts()
@@ -2054,6 +2119,24 @@ TabOpt:CreateToggle({
             end
         end)
         if not okI then notify("Wheel error", tostring(errI), true) end
+    end,
+})
+customsOnlyToggle = TabOpt:CreateToggle({
+    Name = "Song wheel: show only custom songs",
+    CurrentValue = settings.customsOnly or false,
+    Callback = function(value)
+        settings.customsOnly = value
+        saveSettings()
+        local b = hookBase["ListPlayableSongInfosForHeld"]
+        if type(b) == "table" then
+            b.customsOnly = value
+            if value then b.emptyNoticed = false end
+        end
+        if value and not settings.showInWheel then
+            if showWheelToggle then pcall(function() showWheelToggle:Set(true) end) end
+        end
+        notify("Song wheel", value and "Showing only custom songs (reopen the wheel to apply)"
+            or "Showing all songs (reopen the wheel to apply)")
     end,
 })
 
