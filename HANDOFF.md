@@ -31,6 +31,14 @@ Plan / progress (update after every step):
       `playable.lanes = 7` + a key map, `StartPlay` a 7K chart, watch for errors.
 - [ ] Loader: `lanes` + `keyMapOverride` on our song, a theme for N lanes, hint
       labels, skin lane mapping (design below). Candidate first, then live-test.
+      IN PROGRESS (a new session picked this up at b77bd38, 2026-10-11). Sub-steps:
+      - [ ] read the loader sites (readChart lane check, buildGameSong, noteShapeHost,
+            skin wrap, settings load/save, Options tab) and fix the exact design
+      - [ ] `ResolvePlayable` hook slot (sets `playable.lanes` for songs we own)
+      - [ ] N-lane view theme + hint labels (wrap the settings-module getters, NOT the
+            StoredToViewTheme slot the skin code owns)
+      - [ ] settings + Rayfield "Keys (4K+)" page
+      - [ ] candidate file, `tools/check.py`, live test (needs the probe cleaned up first)
 - [ ] Rayfield "Keys (4K+)" page: per-lane-count key binding (5K, 6K, 7K...), saved
       in Settings.json. Later, optionally, the game's own settings page (see below).
 - [ ] Converter: stop folding when the loader supports the lane count (`--no-fold`
@@ -67,6 +75,21 @@ Plan / progress (update after every step):
   `for i = #P.restore, 1, -1 do pcall(P.restore[i]) end; P.active = false` once
   `service._session/_view/_resultsScreen` are all nil. A re-exec of the loader does not
   clear it.
+
+- 2026-10-11 (session 2 picked up at b77bd38, tree clean): checked the live client 14512
+  (loader 2.0.18, gen 59, bridge had just reconnected). The probe is STILL ACTIVE:
+  `__probe4k.active=true watcher=true restoreFns=4`, results screen up, probe song and
+  guard id still present, `PlayingInstrument=Keyboard`, and the probe's `resolvePlayable`
+  and `StoredToViewTheme` wrappers (executor functions) are still installed. Everything
+  restores by itself once the results screen is dismissed. **Do not re-execute the loader
+  on that client before then**: `activateSkin` takes `rawget(StoredToViewTheme)` as its
+  "original" and would capture the probe's wrapper. Offline loader work is unaffected.
+- RISK found while choosing default 4K+ keys: Rayfield's own toggle key defaults to `K`
+  (ui/Rayfield.lua config `rayfieldOpen = K`) and GakuranChart.lua passes no
+  `ToggleUIKeybind`, so `K` would toggle the UI during play. Default 4K+ binds avoid K
+  (5K S D Space J L / 6K S D F J L Semicolon / 7K S D F Space J L Semicolon); the page
+  should warn if a lane is bound to the Rayfield toggle key. UNVERIFIED that K really is
+  the live toggle key; check before relying on it.
 
 ### Findings (live decompile, 2026-10-11) - 4K+ is an engine-supported shape
 - `RhythmChartUtil.getLaneCount(mode)` is hard-coded (Guitar/RhythmGuitar 2, else 4)
