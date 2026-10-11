@@ -49,7 +49,20 @@ committed is lost. So:
       (v2.0.10/2.0.11 give `song.difficulty = { [mode] = "★x.xx" }` in `injectSingle`; check which rows lack it:
       first suspects are the `chart.mode` key vs the wheel's instrument mode, charts that skip `injectSingle`
       (parents with `not uniform`, non-Keyboard modes), 5K-7K lane charts, and `Kit.tier` word handling).
-      Not investigated yet.
+      Static pass done (session 6, no live client in this env — NOT live-verified):
+      mode-key mismatch ruled out (all 30 workspace charts: mode=Keyboard,
+      diffKeys=Keyboard); singleton groups (day_by_day, dragon_blade,
+      d_for_the_delta, sound_architect) and no-songId test_end all go through
+      injectSingle, which always assigns a ★ string (starRating never throws —
+      pcall inside, falls back to 0.5). Prime suspect now: HK.makeDiffTier only
+      overrides when the game's tier(★) returns a table; if wheelKit.tier has
+      its own lookup (does not call our wrapped Difficulty.Key), tier("★x.xx")
+      returns nil and the wrapper passes nil through — badge draws nothing.
+      Fix sketch (NOT applied): on ★ input with nil/non-table under-result,
+      map ★ to its band tier name (same bands as makeDiffKey), call
+      under(tierName) for a template, copy it and set word=★. Next: live probe
+      (diag hooks DiffKey/DiffTier slot==wrap; call tier("★5.32") + Key("★5.32")
+      directly; read which singleton rows lack badges on screen).
 ### Current task (session 4): import the osu! maps with more than 4 keys as real 4K+ charts
 Goal (user, 2026-10-11): the loader plays 5-7 lanes now (v2.0.19/2.0.20), so import the
 osu! maps that have more than 4 columns as native 4K+ charts instead of 4-lane folds.
