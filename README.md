@@ -18,9 +18,12 @@ so nothing custom is ever sent to the server.
 
 ## Usage
 
-1. Put `GakuranChart.lua`, `ui/Rayfield.lua`, and the `GakuranCharts/` folder
-   into the executor workspace (Madium: `AppData/Local/Madium/Workspace`).
-2. Execute `GakuranChart.lua` in-game.
+1. Put `GakuranChart.lua` and the `GakuranCharts/` folder into the executor
+   workspace (Madium: `AppData/Local/Madium/Workspace`), plus
+   [Rayfield](https://github.com/shlexware/Rayfield) at `ui/Rayfield.lua`
+   (not vendored here).
+2. Execute `GakuranChart.lua` in-game — or `python tools/deploy.py --live`,
+   which syntax-checks it first and refuses to copy a broken file.
 3. In the Rayfield window: pick a chart → **Play chart**. Keybind default: Rayfield's toggle key.
 4. Stop restores your character attributes and removes the highway.
 
@@ -32,6 +35,16 @@ so you never end up with duplicate windows or competing watcher loops.
 The character must exist. The script sets `PlayingInstrument`/`ItemEquipped`
 attributes locally (client-only, restored on stop) to pass the game's
 "are you holding the instrument" check.
+
+## Before you deploy
+
+`tools/check.py` parse-checks `GakuranChart.lua` offline (via the `luau` CLI —
+`rokit add --global luau-lang/luau`), compiles the Python tools, and validates
+every chart and skin manifest as JSON. `tools/deploy.py` runs it and only then
+copies the loader into the workspace — as `GakuranChart_<name>_candidate.lua` by
+default, so the known-good deployed copy survives until the new one is verified
+in-game. `--live` overwrites `GakuranChart.lua`; `--clean` removes stale
+candidates.
 
 ## Converting osu! maps
 
@@ -79,8 +92,11 @@ JSON, one file per chart in `GakuranCharts/Charts/`:
 
 ## Options (persisted to GakuranCharts/Settings.json)
 
-- Audio offset (±500 ms)
-- Background/dim (uses the map's background image if present, else a solid color)
+- Audio offset (±500 ms) — added to the chart's own `offsetMs`, so a
+  per-chart correction and your global calibration stack
+- Background/dim (uses the map's background image if present, else a solid
+  color). The dim slider darkens images via a black overlay, and sets the
+  opacity of the solid-color fallback.
 - Show custom songs in the in-game song wheel (off by default). All charts in
   `GakuranCharts/Charts` are listed at loader start, when toggled on, and on
   "Refresh chart list". The game's wheel filters by the instrument your
@@ -123,8 +139,9 @@ python tools/osu2skin.py "C:/Users/<you>/AppData/Local/osu!/Skins/MySkin" ^
   wraps `StoredToViewTheme` to inject note/receptor images while one of our
   sessions runs. The game's own `SetNoteShape`/`SetCustomImage` are never used
   (they persist via a server remote).
-- Limitation: one note image for all 4 lanes (the engine has no per-lane
-  textures); judgement popups and hit sounds stay game-default.
+- Per-lane tap art, dedicated hold-head art and pressed-receptor art are all
+  applied (`3b4358f`, `d35b546`). Judgement popups and hit sounds stay
+  game-default.
 
 ## v1.1 fixes (verified in-game)
 
@@ -182,7 +199,8 @@ custom is sent to the server.
 | `tools/osu2gakuran.py` | osu! → GakuranCharts JSON converter |
 | `tools/osu2skin.py` | osu! skin → GakuranCharts/Skins pack converter |
 | `GakuranCharts/Skins/` | Converted skin packs (manifest + sprites) |
-| `GakuranCharts/Charts/test_end.json` | 30 s smoke-test chart (end/duration/holds) |
+| `tools/check.py` | Syntax gate: Luau parse + Python + chart/manifest JSON |
+| `tools/deploy.py` | Gate, then copy the loader into the executor workspace |
 | `FunkyChart_v1.23/` | Original FunkyFriday reference (loader stub + converter exe) |
 
 Credit: FunkyChart concept and original by accountrevived. GakuranChart remake for

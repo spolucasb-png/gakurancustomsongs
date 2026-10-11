@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.11
+    GakuranChart v2.0.12
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.11"
+local VERSION = "2.0.12"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -38,7 +38,7 @@ local SETTINGS_FILE = FOLDER .. "/Settings.json"
 ----------------------------------------------------------------
 local function requireFn(name)
     if type(_G[name]) == "function" then return _G[name] end
-    if type(getfenv) then
+    if type(getfenv) == "function" then
         local ok, env = pcall(function() return getfenv(0) end)
         if ok and type(env) == "table" and type(env[name]) == "function" then
             return env[name]
@@ -578,7 +578,7 @@ local function loadSettings()
 end
 
 -- ensure folders exist
-for _, dir in ipairs({ FOLDER, CHARTS_DIR, AUDIO_DIR, ASSETS_DIR }) do
+for _, dir in ipairs({ FOLDER, CHARTS_DIR, AUDIO_DIR, ASSETS_DIR, SKINS_DIR }) do
     if not fn.isfolder(dir) then pcall(fn.makefolder, dir) end
 end
 loadSettings()
@@ -598,8 +598,14 @@ end
 ----------------------------------------------------------------
 -- 3. Chart loading
 ----------------------------------------------------------------
+-- Assigned by buildUI() once Rayfield exists (and cleared by cleanup).
+-- Until then - and if the UI build fails - notifications stay warn-only.
+local uiNotify = nil
+
 local function notify(title, body, isError)
     warn(("[GakuranChart] %s: %s"):format(title, body))
+    -- pcall: a Rayfield API change must never turn a message into an error.
+    if uiNotify then pcall(uiNotify, title, body, isError) end
 end
 
 local function listChartFiles()
@@ -659,6 +665,13 @@ local function readChart(path)
     if #cleaned == 0 then
         return nil, "All notes were invalid (lanes must be 1.." .. lanes .. ")"
     end
+    -- The converter emits sorted notes, but hand-made/hand-edited charts may
+    -- not be. Strict weak ordering (beat, then lane) keeps table.sort valid
+    -- even when two notes share both.
+    table.sort(cleaned, function(x, y)
+        if x.b ~= y.b then return x.b < y.b end
+        return x.l < y.l
+    end)
     data.charts[data.mode] = cleaned
     data._droppedNotes = dropped
     return data
@@ -713,6 +726,20 @@ local function createUnderframe(chart)
     end
     bg.ZIndex = 0
     bg.Parent = gui
+    -- "Background dim (%)" only ever moved BackgroundTransparency, which an
+    -- ImageLabel's pixels ignore - the slider did nothing for maps that ship a
+    -- background image. Dim those with a black sheet over the image instead
+    -- (same 0 = untouched .. 1 = fully dark scale as the solid-colour path).
+    if bg:IsA("ImageLabel") then
+        local dim = Instance.new("Frame")
+        dim.Name = "Dim"
+        dim.BackgroundColor3 = Color3.new(0, 0, 0)
+        dim.BackgroundTransparency = math.clamp(1 - (settings.bgTransparency or 0), 0, 1)
+        dim.BorderSizePixel = 0
+        dim.Size = UDim2.fromScale(1, 1)
+        dim.ZIndex = 1
+        dim.Parent = bg
+    end
     underframeGui = gui
 end
 
@@ -795,7 +822,10 @@ local function buildGameSong(chart)
         animationbpm = chart.animationbpm or chart.bpm,
         animationBpmChanges = chart.animationBpmChanges,
         startAt = tonumber(chart.startAt) or 0,
-        offsetMs = settings.offsetMs or 0,
+        -- Global calibration (Options slider) plus the chart's own correction.
+        -- chart.offsetMs is written by the converter and documented in the
+        -- README, but used to be dropped on the floor here.
+        offsetMs = (settings.offsetMs or 0) + (tonumber(chart.offsetMs) or 0),
         approach = tonumber(chart.approach) or 5,
         charts = { [mode] = chart.charts[mode] },
         soundIds = { [mode] = audioAsset },
@@ -2151,6 +2181,7 @@ _G.GakuranChartCleanup = function()
             pcall(restoreAttributes)
             pcall(destroyUnderframe)
         end
+        uiNotify = nil   -- stop notifying through a window we are destroying
         pcall(function()
             if Rayfield and type(Rayfield.Destroy) == "function" then Rayfield:Destroy() end
         end)
@@ -2763,6 +2794,11 @@ end)
 -- so the diff against the previous version stays reviewable.
 local function buildUI()
 Rayfield = loadstring(fn.readfile("ui/Rayfield.lua"))()
+
+-- Route notify() through Rayfield now that it exists. Errors linger longer.
+uiNotify = function(title, body, isError)
+    Rayfield:Notify({ Title = title, Content = body, Duration = isError and 9 or 4 })
+end
 
 local Window = Rayfield:CreateWindow({
     Name = "GakuranChart v" .. VERSION,

@@ -5,7 +5,8 @@ Written 2026-10-10 from a static read of `GakuranChart.lua` (HEAD `578c2d8`).
 **Every bug below is "likely, please verify"**. Nothing here has been confirmed in-game yet.
 Items are ordered: safety first, then cheap wins, then features.
 
-## Working rules (from SESSION_NOTES.md)
+## Working rules
+<!-- SESSION_NOTES.md is not in the repo; these rules are the canonical copy. -->
 
 - Don't touch `.lua` without explicit go-ahead.
 - Test candidate files from the workspace first; keep the known-good deployed copy until verified.
@@ -58,8 +59,10 @@ Order: A1.5, then A1, A2, A3. A1 is Python-only and cannot regress the loader, s
 ## Do in order
 
 ### 1. Baseline (read-only)
-- [ ] Diff the deployed workspace `GakuranChart.lua` against HEAD `578c2d8` to confirm what "known good" is.
-- [ ] Decide whether to commit `SESSION_NOTES.md` (currently untracked).
+- [x] Diffed the deployed workspace copy against the repo: byte-identical to HEAD
+  at `cd418f5` (v2.0.11) before the v2.0.12 batch, so "known good" was unambiguous.
+- [x] `SESSION_NOTES.md` is absent from this working tree; its working rules were
+  folded into the "Working rules" section above, which is now canonical.
 - [ ] Verify each claimed bug in the code, starting with #2 and #3 below.
 - [ ] Leave the SV spawn-extension block (~L1092-1220) alone. It was verified live and the review only skimmed it.
 
@@ -83,15 +86,28 @@ Order: A1.5, then A1, A2, A3. A1 is Python-only and cannot regress the loader, s
 - [ ] Check how the converter handles >4 keys (Python only, no game needed).
 - [ ] Either fold/merge columns to 4 or warn at convert time.
 
-### 5. Small fixes (one commit)
-- [ ] Sort notes by `b` in `readChart` (hand-made charts may be out of order).
-- [ ] Fix `if type(getfenv) then` (L41) to `== "function"`.
-- [ ] Create `SKINS_DIR` in the folder loop (L195).
-- [ ] Use `Rayfield:Notify` for errors instead of `warn` only.
+### 5. Small fixes — DONE (v2.0.12, all six verified live)
+- [x] Sort notes by `b` in `readChart`. Strict weak ordering (beat, then lane) so
+  `table.sort` stays valid on duplicates. Verified: input `9/2 1/4 5/1 3/3 1/1 7/2`
+  loaded back as `1/1 1/4 3/3 5/1 7/2 9/2`.
+- [x] Fix `if type(getfenv) then` (L41) to `== "function"`. Verified the bug class
+  live: the old form returns `true` for a *missing* function. No behaviour change
+  on Madium (which has `getfenv`); this only matters on executors without it.
+- [x] Create `SKINS_DIR` in the folder loop. Loop pattern verified on a throwaway
+  path (`GC_ztest/Skins` absent -> created); the real Skins dir was not deleted to
+  test, so this one is "mechanism verified", not a true negative test.
+- [x] Use `Rayfield:Notify` for errors instead of `warn` only. `notify()` took an
+  `isError` argument and discarded it, so nothing ever reached the screen. Now
+  routed through a late-bound `uiNotify` set by `buildUI` (nil if the UI build
+  fails, cleared by cleanup, `pcall`-guarded). Verified: a real notification
+  rendered at `Container.Rayfield.Notifications.No chart`.
 - [x] Sync version: code, header comment and README now all say 2.0 (done in the version-bump commit).
-- [ ] Fix README: it says "one note image for all 4 lanes" but per-lane taps, hold heads and pressed receptors now exist.
-- [ ] Background dim does nothing for images (L311-315): add a black overlay frame tied to the slider. *(needs a quick in-game look)*
-- [ ] Honor per-chart `chart.offsetMs` in `buildGameSong` (L377). *(needs a quick in-game look)*
+- [x] Fix README: the "one note image for all 4 lanes" claim is gone, along with
+  the references to files the repo does not ship.
+- [x] Background dim does nothing for images: a black `Dim` overlay frame now sits
+  over the ImageLabel. Verified live at 60% dim -> `Dim.BackgroundTransparency` 0.4.
+- [x] Honor per-chart `chart.offsetMs` in `buildGameSong`. Now `settings.offsetMs +
+  chart.offsetMs`. Verified live: global 50 + chart 123 -> injected `offsetMs=173`.
 - [ ] Clearer "N notes dropped" message when validating charts.
 
 ### 6. Startup self-test and `_G.GakuranChart.diag()`

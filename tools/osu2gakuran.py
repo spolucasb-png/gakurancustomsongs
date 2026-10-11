@@ -178,9 +178,26 @@ def convert_hitobjects(sections: dict, reds, svs, keys: int, mode: int):
     return notes, warnings
 
 
-def sanitize_id(s: str) -> str:
+ID_LIMIT = 64
+
+
+def sanitize_id(s: str, limit: int = ID_LIMIT) -> str:
+    """Filesystem-safe lowercase id, at most `limit` characters.
+
+    Names that already fit are returned unchanged, so every chart converted by
+    an earlier version keeps its id. Longer names end in a short digest of the
+    FULL name instead of being cut: plain truncation made two difficulties of a
+    long-titled song collapse onto the same id (`..._artist_e` for both "Easy"
+    and "Expert"), and the second .json written then silently overwrote the
+    first - losing a difficulty off the song's wheel row.
+    """
     s = re.sub(r"[^a-zA-Z0-9]+", "_", s).strip("_").lower()
-    return s[:64] or "chart"
+    if not s:
+        return "chart"
+    if len(s) <= limit:
+        return s
+    digest = hashlib.sha1(s.encode("utf-8")).hexdigest()[:8]
+    return s[: limit - 9].rstrip("_") + "_" + digest
 
 
 # Absolute difficulty tiers by note density (notes/second). The names are the
