@@ -15,7 +15,21 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
-### Open issue (investigated, NOT fixed): hit flash / hit ring orientation
+### Current task (session 9): FIX hit flash / hit ring orientation (user approved 15:57)
+Plan (log progress here after every step):
+- [x] Read paint helpers + teardown (`paintImage`, `restoreViewVisuals`, cleanup).
+- [x] IMPLEMENTED (v2.0.29, committed as WIP, NOT yet live-verified; patch script
+  `C:\Users\Administrator\_gk_patch\patch_hitfx.py` already applied, do not re-run):
+  per-view `PlayHitEffect` wrapper that, for the duration of the original call,
+  overrides `acquire` on `_flashPool` and `_ringPool` so the acquired frame is
+  painted with the lane's tap art at spawn; widen the guard with
+  hasTapVariants/hasRecVariants; per-frame repaint also covers the ring;
+  restoreViewVisuals unwraps and resets pool frames to the base image.
+- [ ] Candidate -> live test with REAL spawned effects: image at the spawn
+  instant for flash AND ring on lanes 1-4, no stacking after re-exec, 0 errors.
+- [ ] check.py, deploy (candidate first, `--live` only after verification),
+  commit, ROADMAP + this file.
+Investigation that led here (kept for reference):
 User report (2026-10-11 15:51): the NoteHitFlash does not spawn oriented per
 lane like the receptor arrows. Findings from real `view:PlayHitEffect(lane)`
 calls on the live client (14512, AmbieArrowsFFR skin, loader v2.0.28):

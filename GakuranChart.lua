@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.28
+    GakuranChart v2.0.29
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.28"
+local VERSION = "2.0.29"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -1725,7 +1725,11 @@ local themeSettingsMod = GC.themeSettings
 --     and its Band, which the engine painted with the same image);
 --   * show the pressed image on lanes whose _receptorPressed flag is set
 --     and the resting image otherwise (Receptors[lane].ReceptorVisual,
---     plus the ReceptorGlow backing and its Band).
+--     plus the ReceptorGlow backing and its Band);
+--   * paint the hit flash and the hit ring with the lane's tap art AT SPAWN
+--     (wrapHitEffect). The engine orients them only through
+--     RhythmNoteSprites.GetRotation, which is 0 for our shapes, and both pools
+--     share the base (Up) image and recycle frames with their last lane's art.
 -- Purely cosmetic: no timing/judging state is read or written. Painting
 -- goes through the engine's own RhythmNoteSprites.Paint(label, image,
 -- rect, pixelated); with rect nil it also resets ImageRectOffset/Size,
@@ -1744,6 +1748,7 @@ local visRecPressedImgs = setmetatable({}, { __mode = "k" })  -- view -> pressed
 local visFrameErrors = 0
 local visDisabled = false   -- set after 60 frame errors (SV is unaffected)
 local visWrites = 0
+local visHitWrapped = setmetatable({}, { __mode = "k" })  -- view -> { tapImgs, head } while our PlayHitEffect wrapper is installed
 
 local function paintImage(label, image)
     local paint = noteSpritesMod and noteSpritesMod.Paint
@@ -1784,6 +1789,89 @@ local function paintReceptorImage(view, lane, image)
     end
 end
 
+-- Hit flash / hit ring orientation.
+-- RhythmView:PlayHitEffect(lane) takes one frame from view._flashPool and one
+-- from view._ringPool (reusable frames that carry the base note image and keep
+-- whatever image they were last painted with) and orients both ONLY through
+-- Rotation = RhythmNoteSprites.GetRotation(shape, laneCount, lane). Our skin
+-- shapes register Rotation 0 (per-lane art instead), so without this every
+-- flash/ring is an Up arrow, or the previous lane's arrow when a frame is
+-- recycled. The lane IS known inside PlayHitEffect's argument list, so for the
+-- duration of one call we shadow `acquire` on both pools: the frame is painted
+-- with that lane's tap art the moment it is handed out, before the engine
+-- positions/tweens it, so there is no wrong frame to catch up on. Everything is
+-- instance-level (rawset on the view / the pools), removed again straight after
+-- the call, and undone by unwrapHitEffect.
+local function hitArtFor(art, lane)
+    local t = art.tapImgs
+    return (type(t) == "table" and t[lane]) or art.head
+end
+
+local function wrapHitEffect(view, tapImgs, head)
+    local art = visHitWrapped[view]
+    if art then
+        art.tapImgs, art.head = tapImgs, head   -- skin re-activated: refresh the art
+        return
+    end
+    local mt = getmetatable(view)
+    local class = type(mt) == "table" and mt.__index or nil
+    local orig = type(class) == "table" and class.PlayHitEffect or nil
+    if type(orig) ~= "function" then return end   -- engine changed: per-frame fallback still runs
+    art = { tapImgs = tapImgs, head = head }
+    visHitWrapped[view] = art
+    rawset(view, "PlayHitEffect", function(self, lane, ...)
+        local shadowed = {}
+        local cur = visHitWrapped[view]
+        if cur and type(lane) == "number" then
+            local img = hitArtFor(cur, lane)
+            if img then
+                pcall(function()
+                    for _, key in ipairs({ "_flashPool", "_ringPool" }) do
+                        local pool = self[key]
+                        local acquire = type(pool) == "table" and pool.acquire or nil
+                        if type(acquire) == "function" then
+                            rawset(pool, "acquire", function(p, ...)
+                                local inst = acquire(p, ...)
+                                if typeof(inst) == "Instance" and inst.Image ~= img then
+                                    pcall(paintImage, inst, img)
+                                end
+                                return inst
+                            end)
+                            shadowed[#shadowed + 1] = pool
+                        end
+                    end
+                end)
+            end
+        end
+        local res = table.pack(pcall(orig, self, lane, ...))
+        for _, pool in ipairs(shadowed) do pcall(rawset, pool, "acquire", nil) end
+        if not res[1] then error(res[2], 0) end
+        return table.unpack(res, 2, res.n)
+    end)
+end
+
+local function unwrapHitEffect(view)
+    if visHitWrapped[view] then
+        pcall(rawset, view, "PlayHitEffect", nil)
+        visHitWrapped[view] = nil
+    end
+    -- pooled frames keep the last lane's art: put the view's own image back
+    local base = view._noteImage
+    if base then
+        for _, key in ipairs({ "_flashPool", "_ringPool" }) do
+            local pool = view[key]
+            local list = type(pool) == "table" and rawget(pool, "_pool") or nil
+            if type(list) == "table" then
+                for _, inst in ipairs(list) do
+                    if typeof(inst) == "Instance" and inst.Image ~= base then
+                        pcall(paintImage, inst, base)
+                    end
+                end
+            end
+        end
+    end
+end
+
 -- Put a view's own tap/resting images back on every pooled note frame and
 -- receptor (the images the engine painted when it built the view).
 -- Per-lane tap art is restored from the lane tracked while painting plus
@@ -1819,6 +1907,7 @@ local function restoreViewVisuals(view)
             paintReceptorImage(view, lane, want)
         end
     end
+    unwrapHitEffect(view)
 end
 
 local function restoreTouchedViews()
@@ -1838,12 +1927,17 @@ local function visApplyFrameInner()
     if type(view) ~= "table" then return end
     local ss = skinState
     local theme = view._theme
-    if not (ss and (ss.hasHoldHead or ss.hasPressed) and type(theme) == "table"
+    if not (ss and (ss.hasHoldHead or ss.hasPressed or ss.hasTapVariants or ss.hasRecVariants)
+        and type(theme) == "table"
         and view._noteImage == ss.head and theme.ReceptorImage == ss.receptor) then
         -- no skin, a skin without extras, or a view built under a different
         -- skin: leave it alone (and undo anything we painted earlier)
         if visTouched[view] then restoreViewVisuals(view) end
         return
+    end
+    if ss.hasTapVariants then
+        wrapHitEffect(view, ss.tapImgs, ss.head)
+        if visHitWrapped[view] then visTouched[view] = true end
     end
     if ss.hasHoldHead or ss.hasTapVariants then
         local active = sess._active
@@ -1895,12 +1989,13 @@ local function visApplyFrameInner()
             end
         end
     end
-    -- Hit-flash pool clones share the template's base note image (painted once
-    -- at view build, always the Up orientation for directional skins), so the
-    -- flash on lanes 1/2/4 shows the wrong arrow. Clones keep the template
-    -- name; their lane comes from Position.X via view._laneXs. Repaint with
+    -- Fallback for hit flashes and rings (the real fix is wrapHitEffect, which
+    -- paints them at spawn while the lane is known): pooled frames share the
+    -- template's base note image (always the Up orientation for directional
+    -- skins) and keep whatever lane art they last had. They keep the template
+    -- names; their lane comes from Position.X via view._laneXs. Repaint with
     -- the lane's tap art (same fallback as notes). Our shape registers
-    -- Rotation 0, so the engine's per-lane flash rotation is a no-op for us.
+    -- Rotation 0, so the engine's per-lane rotation is a no-op for us.
     if ss.hasTapVariants then
         local laneXs = view._laneXs
         local root = view._contentRoot
@@ -1910,7 +2005,8 @@ local function visApplyFrameInner()
             pcall(function() kids = root:GetChildren() end)
             if type(kids) == "table" then
                 for _, inst in ipairs(kids) do
-                    if inst.Name == "HitFlashTemplate" and inst:IsA("ImageLabel") then
+                    if (inst.Name == "HitFlashTemplate" or inst.Name == "HitRingTemplate")
+                        and inst:IsA("ImageLabel") then
                         local x = inst.Position.X.Offset
                         local best, bestD = 1, nil
                         for i, lx in ipairs(laneXs) do
