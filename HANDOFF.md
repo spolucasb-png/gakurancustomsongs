@@ -32,13 +32,21 @@ Plan / progress (update after every step):
 - [ ] Loader: `lanes` + `keyMapOverride` on our song, a theme for N lanes, hint
       labels, skin lane mapping (design below). Candidate first, then live-test.
       IN PROGRESS (a new session picked this up at b77bd38, 2026-10-11). Sub-steps:
-      - [ ] read the loader sites (readChart lane check, buildGameSong, noteShapeHost,
-            skin wrap, settings load/save, Options tab) and fix the exact design
-      - [ ] `ResolvePlayable` hook slot (sets `playable.lanes` for songs we own)
-      - [ ] N-lane view theme + hint labels (wrap the settings-module getters, NOT the
-            StoredToViewTheme slot the skin code owns)
-      - [ ] settings + Rayfield "Keys (4K+)" page
-      - [ ] candidate file, `tools/check.py`, live test (needs the probe cleaned up first)
+      - [x] read the loader sites, fixed the design (see "Work log": session 2)
+      - [x] `ResolvePlayable` hook slot (sets `playable.lanes` for songs we own)
+      - [x] N-lane view theme + hint labels + key map: three wrappers on the settings
+            module getters (`GetViewTheme`, `GetKeyboardHintLabels`,
+            `GetKeyboardKeyMap`), NOT on the `StoredToViewTheme` slot the skin code owns
+      - [x] settings (`settings.keys`) + Rayfield "Keys (4K+)" tab - WRITTEN, only the
+            tab's construction was exercised live; rebinding / duplicate rejection /
+            reset button NOT clicked yet
+      - [x] candidate built (`GakuranChart_4k_candidate.lua`), `tools/check.py` ok,
+            offline logic test 29/29, live install + 7K play verified (work log)
+      - [ ] hit-bot judging check with lanes 5-7 (first run was inconclusive)
+      - [ ] look at it on screen (user), SV / skin passes with 7 lanes, then commit
+        THE LOADER CHANGE IS UNCOMMITTED in the working tree (v2.0.19, +272/-5 lines);
+        regenerate/inspect with `git diff`; the patch script is
+        `_scratch_convert\patch_4k_loader.py` (already applied, do not re-run).
 - [ ] Rayfield "Keys (4K+)" page: per-lane-count key binding (5K, 6K, 7K...), saved
       in Settings.json. Later, optionally, the game's own settings page (see below).
 - [ ] Converter: stop folding when the loader supports the lane count (`--no-fold`
@@ -90,6 +98,46 @@ Plan / progress (update after every step):
   (5K S D Space J L / 6K S D F J L Semicolon / 7K S D F Space J L Semicolon); the page
   should warn if a lane is bound to the Rayfield toggle key. UNVERIFIED that K really is
   the live toggle key; check before relying on it.
+
+- 2026-10-11 session 2, probe cleanup: the probe restored itself (`restored after surface
+  gone at +627s`) once the user dismissed the results screen; verified: no session, probe
+  song gone from the registry, `PlayingInstrument=nil`, neither module function executor-wrapped.
+- 2026-10-11 session 2, LOADER v2.0.19 CANDIDATE (UNCOMMITTED, working tree):
+  * chart JSON may carry `"lanes": 5..7` (Keyboard only); `readChart` normalizes to
+    `chart._laneCount` (more than `HK.maxLanes = 7` is refused with a message), `buildGameSong`
+    sets `song.gakuranLanes` and REFUSES the chart if `HK.lanesSupported()` is false (hooks
+    missing), the picker's `SWAP_FIELDS` carries `gakuranLanes` (a parent's difficulties may
+    differ in lane count), the Rayfield info label shows `_laneCount`.
+  * 4 new HookBase slots, same discipline (wrapper closes over its record only): `ResolvePlayable`
+    (`RhythmChartUtil.resolvePlayable`, sets `playable.lanes`), `ViewTheme`
+    (`GetViewTheme`, n>4 -> cycles the 4-lane arrays of a COPY of the stored theme and calls the
+    module's current `StoredToViewTheme`, so skins still apply), `HintLabels`
+    (`GetKeyboardHintLabels`) and `KeyMap` (`GetKeyboardKeyMap`). The service fills
+    `keyMapOverride` from `GetKeyboardKeyMap` only when the song has none, so keys are read from
+    `settings.keys` at every play start (a rebind reaches wheel songs too). The live instance puts
+    `keyNames`/`hintLabels` on the KeyMap/HintLabels records and cleanup clears them only while
+    still its own. `HK.restore` and `diag()` list the new slots.
+  * `settings.keys["5".."7"]` = KeyCode names; invalid/duplicate/Escape/wrong length -> defaults
+    for that count (5K S D Space J L, 6K S D F J L Semicolon, 7K S D F Space J L Semicolon; no K).
+  * Rayfield tab "Keys (4K+)": one keybind per lane (CallOnChange, Ext), duplicate/unusable keys
+    rejected and reverted, "Reset 4K+ keys to defaults" button.
+  * Verified: `tools/check.py` ok. `_scratch_convert\test_4k_logic.py` = 29/29 offline checks
+    (it slices the real code out of the loader and runs it under the luau CLI against stubs).
+    Live, client 14512, candidate `GakuranChart_4k_candidate.lua` run as gen 60: `diag()` "all
+    getgc targets found", 12 hooks installed, the 4 new slots `slot==wrap`, `under==orig`,
+    providers bound, console clean. `G.load` + `G.play` of a throwaway 7K chart (27 notes, 4
+    holds): engine `_lanes=7`, view 7 receptors, lane x 764 841 917 994 1071 1147 1224, keyToLane
+    `S=1 D=2 F=3 Space=4 J=5 L=6 Semicolon=7` (controller buttons still on lanes 1-4), hint labels
+    `S,D,F,Spc,J,L,;`; `G.stop()` restored `PlayingInstrument` to nil in 0.4 s.
+  * NOT verified: first hit-bot run (keypress/keyrelease through the executor) pressed 17 of 27
+    notes (lane 7: 0) and the song ended before the counters were read, so judging with lanes 5-7
+    is still UNPROVEN, and it is unknown whether synthetic keys even register (window focus). Lane
+    colours read back as 255,255,255 on all 7 lanes (default theme; not judged). Look/feel on screen,
+    SV pass and skin pass with 7 lanes, the Keys tab being clicked, a 4K+ song played from the wheel /
+    picker, perspective mode, results/stats contents.
+  * Scratch left behind (delete when done): workspace `GakuranCharts\Charts\__test_7k.json`
+    (the wheel lists it: "8 custom charts") and `GakuranChart_4k_candidate.lua`.
+  * The deployed `GakuranChart.lua` (v2.0.18) was not touched.
 
 ### Findings (live decompile, 2026-10-11) - 4K+ is an engine-supported shape
 - `RhythmChartUtil.getLaneCount(mode)` is hard-coded (Guitar/RhythmGuitar 2, else 4)
