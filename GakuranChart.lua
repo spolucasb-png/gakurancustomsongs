@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.19
+    GakuranChart v2.0.20
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.19"
+local VERSION = "2.0.20"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -190,6 +190,10 @@ local GC = gcScan({
     noteShapeHost = function(t)
         return type(rawget(t, "GetNoteShape")) == "function"
             and type(rawget(t, "GetViewTheme")) == "function"
+    end,
+    viewClass = function(t)
+        return type(rawget(t, "new")) == "function" and type(rawget(t, "GetLaneXAt")) == "function"
+            and type(rawget(t, "SetLaneSpacing")) == "function"
     end,
 })
 
@@ -607,6 +611,32 @@ do
         end
     else
         warn("[GakuranChart] RhythmSettingsClient not found - charts with more than 4 lanes will be refused")
+    end
+end
+
+-- Lane pitch for n > 4. The view spreads a FIXED total width (screen width *
+-- LANE_SPACING_MULTIPLIER * laneSpacing) over the lane count, so 7 lanes get
+-- ~57% of the 4-lane pitch while notes keep their size (80 px) and neighbours
+-- overlap. RhythmView.new(lanes, duration, testTools, theme, hints, laneSpacing,
+-- ...): for n > 4 scale laneSpacing by n/4 (same pitch as 4K), capped so the
+-- track never exceeds 3.0 (0.9 of the screen). Purely cosmetic: if the view
+-- class is not found, plays still work.
+function HK.makeViewNew(b)
+    return function(lanes, ...)
+        local a = table.pack(...)
+        local sp = a[5]
+        if type(lanes) == "number" and lanes > 4 and type(sp) == "number" and sp > 0 then
+            a[5] = math.min(sp * lanes / 4, math.max(sp, 3.0))
+        end
+        return b.under(lanes, table.unpack(a, 1, a.n))
+    end
+end
+do
+    local vc = GC.viewClass
+    if vc and type(rawget(vc, "new")) == "function" then
+        HK.ensure("ViewNew", vc, "new", HK.makeViewNew)
+    else
+        warn("[GakuranChart] RhythmView not found - charts with more than 4 lanes will use the stock lane pitch")
     end
 end
 
@@ -2454,7 +2484,7 @@ function HK.restore()
     if type(base) ~= "table" or base.version ~= HOOK_BASE_VERSION then return true end
     local allGone = true
     for _, name in ipairs({ "SubmitStats", "QueryJamSync", "FireStart", "ListPlayableSongInfosForHeld", "StartPlay", "WheelMenu", "DiffKey", "DiffTier",
-                          "ResolvePlayable", "ViewTheme", "HintLabels", "KeyMap" }) do
+                          "ResolvePlayable", "ViewTheme", "HintLabels", "KeyMap", "ViewNew" }) do
         local b = base[name]
         if type(b) == "table" and type(b.mod) == "table" and type(b.wrap) == "function" then
             local cur = b.mod[b.key]
@@ -3913,7 +3943,7 @@ _G.GakuranChart = {
         for _, name in ipairs({ "SubmitStats", "QueryJamSync", "FireStart",
                                 "ListPlayableSongInfosForHeld", "DiffKey",
                                 "DiffTier", "StartPlay", "WheelMenu",
-                                "ResolvePlayable", "ViewTheme", "HintLabels", "KeyMap" }) do
+                                "ResolvePlayable", "ViewTheme", "HintLabels", "KeyMap", "ViewNew" }) do
             local b = hookBase[name]
             if type(b) ~= "table" then
                 hooks[name] = "absent"
