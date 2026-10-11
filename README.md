@@ -176,7 +176,7 @@ python tools/osu2skin.py "C:/Users/<you>/AppData/Local/osu!/Skins/MySkin" ^
   sessions runs. The game's own `SetNoteShape`/`SetCustomImage` are never used
   (they persist via a server remote).
 - Per-lane tap art, dedicated hold-head art and pressed-receptor art are all
-  applied (`3b4358f`, `d35b546`). Judgement popups and hit sounds stay
+  applied (`dbeaf89`, `be61884`). Judgement popups and hit sounds stay
   game-default.
 
 ## v1.1 fixes (verified in-game)

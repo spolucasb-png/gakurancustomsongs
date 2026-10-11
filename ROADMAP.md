@@ -1,7 +1,7 @@
 # GakuranChart Roadmap
 
-Written 2026-10-10 from a static read of `GakuranChart.lua` (HEAD `578c2d8`).
-**Status:** items 2 and 3 are done and verified live in `bdd1402`; version synced to 2.0 in `dd0191f`. Next up is the "Current focus" section (multi-difficulty, then above-4K). Everything else below is still unverified and untouched.
+Written 2026-10-10 from a static read of `GakuranChart.lua` (HEAD `fdeab9d`).
+**Status:** items 2 and 3 are done and verified live in `c23dba8`; version synced to 2.0 in `353a2e9`. Next up is the "Current focus" section (multi-difficulty, then above-4K). Everything else below is still unverified and untouched.
 **Every bug below is "likely, please verify"**. Nothing here has been confirmed in-game yet.
 Items are ordered: safety first, then cheap wins, then features.
 
@@ -60,20 +60,20 @@ Order: A1.5, then A1, A2, A3. A1 is Python-only and cannot regress the loader, s
 
 ### 1. Baseline (read-only)
 - [x] Diffed the deployed workspace copy against the repo: byte-identical to HEAD
-  at `cd418f5` (v2.0.11) before the v2.0.12 batch, so "known good" was unambiguous.
+  at `ad0f3c4` (v2.0.11) before the v2.0.12 batch, so "known good" was unambiguous.
 - [x] `SESSION_NOTES.md` is absent from this working tree; its working rules were
   folded into the "Working rules" section above, which is now canonical.
 - [ ] Verify each claimed bug in the code, starting with #2 and #3 below.
 - [ ] Leave the SV spawn-extension block (~L1092-1220) alone. It was verified live and the review only skimmed it.
 
-### 2. Stability: UI failure leaves a half-initialised loader (L1517, L1780) — DONE (`bdd1402`)
+### 2. Stability: UI failure leaves a half-initialised loader (L1517, L1780) — DONE (`c23dba8`)
 - [x] Register `_G.GakuranChartCleanup` **before** the UI is built.
 - [x] Wrap the Rayfield load/build in a protected call (`buildUI()` + `xpcall`).
 - [x] ~~Fall back to headless mode~~ Changed approach: on failure the loader **rolls back fully** instead (retire instance via generation bump, run pre-registered cleanup, `sweepRayfield`, deferred `HK.finish()` while a custom session tears down). Headless fallback was dropped.
 - Verified live (Test B, forced UI error in a temp copy): hook slots back to original, 0 guard ids, 0 persistentFrame conns, 0 windows, ledger 0; a normal re-exec afterwards recovered everything.
 - Why: if the UI errors, the `RenderStepped` connection, skin wrap and hooks stay live and the next run can't clean them up.
 
-### 3. Stability: safety-net hooks stack across re-executions (L143-167) — DONE (`bdd1402`)
+### 3. Stability: safety-net hooks stack across re-executions (L143-167) — DONE (`c23dba8`)
 - [x] Keep the genuine `SubmitStats`, `QueryJamSync`, `FireStart` and restore them in cleanup. Implemented as a versioned shared base (`_G.GakuranChartHookBase` v2): one stable wrapper per hook, genuine originals recovered by peeling legacy-shaped wrappers, restore only while our wrapper is installed.
 - [x] Cleanup removes injected songs from the registry and wheel via an identity-based ledger (`_G.GakuranChartLedger` v1) that also restores displaced genuine entries.
 - Verified live: Test A (3 re-execs, zero growth), Test C (custom ids guarded, no network calls), Test D (play/stop/teardown, double cleanup clean).
