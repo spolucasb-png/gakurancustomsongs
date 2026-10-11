@@ -73,6 +73,17 @@ Circles skin) and port them into the custom-song script. OSU folder already done
   import to workspace → live verify (load all, spot-play, skins apply) →
   final commit. Skins go to repo GakuranCharts/Skins (converted output, not
   the forbidden source folder).
+- [x] Converters done + verified (see ROADMAP 11): sm 2 charts, qua 4 charts,
+  nyan + bozo-6.6k-SV played live with 0 errors, both skins 0 vis errors.
+- [x] Unified per user request: tools/convert_song.py + tools/convert_skin.py
+  (import-based, per-format CLIs kept; byte-identical proofs in ROADMAP 11).
+- [x] Skin eyeball fixes (tail-tip orientation is skin-specific, etterna
+  per-lane arrows + hold-width normalize) verified live, scores cleared.
+- [x] DEPLOYED v2.0.25, workspace == repo, candidate cleaned.
+- Repo hygiene lesson (this session): `git add -A` staged 537 untracked
+  FunkyChart_v1.23 files into 8bc108d (reset to 14d76c2 with docs only).
+  FunkyChart_v1.23/* is now gitignored except FunkyChart.lua. From here on:
+  NEVER `git add -A` in this repo — stage explicit paths only.
 
 ### Session 5 (2026-10-11): stage keyboard guard (v2.0.21), chart import answer
 - [x] User bug: Space stands you up from the REAL stage keyboard. Cause (live-verified): seated, Space is

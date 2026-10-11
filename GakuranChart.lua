@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.24
+    GakuranChart v2.0.25
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.24"
+local VERSION = "2.0.25"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -957,7 +957,7 @@ local currentChartPath = nil
 -- as a short title prefix on wheel rows; our own UI adds true ImageLabels
 -- where it owns the GUI (overlay) and text tags elsewhere. Placed here (ahead
 -- of readChart/buildGameSong) so both can close over these locals.
-local SOURCE_TAGS = { osu = "[osu!]", ["local"] = "[local]" }
+local SOURCE_TAGS = { osu = "[osu!]", ["local"] = "[local]", etterna = "[etterna]", quaver = "[quaver]" }
 local function chartSource(chart)
     local s = type(chart) == "table" and type(chart.source) == "string" and chart.source or ""
     s = s:lower():gsub("[^%w]", "")
@@ -997,6 +997,8 @@ paintWheelSourceIcons = function(self, doAdd)
             local lab = tostring(s.Label or "")
             local src = lab:match("^%[osu!%]") and "osu"
                 or lab:match("^%[local%]") and "local"
+                or lab:match("^%[etterna%]") and "etterna"
+                or lab:match("^%[quaver%]") and "quaver"
                 or lab:match("^%[custom%]") and "unknown" or nil
             local V = s.V
             local root = type(V) == "table" and V.Root or nil

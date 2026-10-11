@@ -1,0 +1,26 @@
+{
+  "name": "AmbieArrowsFFR skin",
+  "shapeKey": "GK_AMBIEARROWSFFR_SKIN",
+  "head": "head.png",
+  "receptor": "receptor.png",
+  "tail": "tail.png",
+  "tailW": 58,
+  "tailH": 348,
+  "slice": [
+    28,
+    58,
+    30,
+    290
+  ],
+  "source": {
+    "skinDir": "FunkyChart_v1.23/ETTERNA/AmbieArrowsFFR skin",
+    "keys": 4,
+    "format": "etterna"
+  },
+  "receptorPressed": "receptorPressed.png",
+  "taps": {
+    "1": "tap1.png",
+    "2": "tap2.png",
+    "4": "tap4.png"
+  }
+}

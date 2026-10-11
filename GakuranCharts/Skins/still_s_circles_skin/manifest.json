@@ -1,0 +1,28 @@
+{
+  "name": "Still's Circles skin",
+  "shapeKey": "GK_STILL_S_CIRCLES_SKIN",
+  "head": "head.png",
+  "receptor": "receptor.png",
+  "tail": "tail.png",
+  "tailW": 150,
+  "tailH": 225,
+  "slice": [
+    74,
+    75,
+    76,
+    150
+  ],
+  "source": {
+    "skinDir": "FunkyChart_v1.23/QUAVER/Still's Circles skin",
+    "keys": 4,
+    "lane": 2,
+    "format": "quaver"
+  },
+  "headHold": "headHold.png",
+  "receptorPressed": "receptorPressed.png",
+  "taps": {
+    "1": "tap1.png",
+    "3": "tap3.png",
+    "4": "tap4.png"
+  }
+}

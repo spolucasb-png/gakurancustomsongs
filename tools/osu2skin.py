@@ -306,30 +306,18 @@ def resolve_ref(skin_dir: str, ref: str):
 
 # ------------------------------------------------------------------ main
 
-def main():
-    ap = argparse.ArgumentParser(description="Convert an osu!mania skin into a GakuranChart skin pack")
-    ap.add_argument("skin_dir", help="osu! skin folder (contains skin.ini)")
-    ap.add_argument("--out", required=True, help="output Skins directory")
-    ap.add_argument("--keys", type=int, default=4, help="key-count section to use (default 4)")
-    ap.add_argument("--lane", type=int, default=None,
-                    help="1-based lane for the tap/receptor image when lanes differ (default: middle lane)")
-    ap.add_argument("--aspect", type=float, default=1.0,
-                    help="width/height aspect the engine frame expects for head+receptor (default 1.0 = square)")
-    ap.add_argument("--name", default=None, help="display name (default: skin.ini Name)")
-    args = ap.parse_args()
+def convert_osu_skin(skin_dir: str, out: str, keys: int = 4, lane=None,
+                     aspect: float = 1.0, name=None) -> str:
+    """Convert an osu!mania skin folder into a GakuranChart pack; return out_dir.
 
-    skin_dir = args.skin_dir
-    ini_path = os.path.join(skin_dir, "skin.ini")
-    if not os.path.isfile(ini_path):
-        print(f"error: {ini_path} not found", file=sys.stderr)
-        sys.exit(1)
-
-    sections = parse_ini(ini_path)
-    mania = pick_mania(sections, args.keys)
+    Importable core of main() (moved verbatim): unified convert_skin.py calls
+    this, qua2skin and etterna2skin share the same shape.
+    """
+    sections = parse_ini(os.path.join(skin_dir, "skin.ini"))
+    mania = pick_mania(sections, keys)
     general = next((kv for n, kv in sections if n.lower() == "general"), {})
 
-    keys = args.keys
-    lane = args.lane or (keys // 2 + keys % 2)  # 1-based middle lane
+    lane = lane or (keys // 2 + keys % 2)  # 1-based middle lane
     i = lane - 1
 
     def mania_ref(*names):
@@ -384,12 +372,12 @@ def main():
     # frame-aspect canvas, otherwise Fit renders osu canvases tiny
     hw, hh, head_px = png_decode(head_data)
     head_src = (hw, hh, alpha_bbox(head_px, hw, hh))
-    hw, hh, head_px = fit_to_frame(head_px, hw, hh, args.aspect, head_src[2])
+    hw, hh, head_px = fit_to_frame(head_px, hw, hh, aspect, head_src[2])
     head_out = png_encode(hw, hh, head_px)
 
     rw, rh, rec_px = png_decode(receptor_data)
     rec_src = (rw, rh, alpha_bbox(rec_px, rw, rh))
-    rw, rh, rec_px = fit_to_frame(rec_px, rw, rh, args.aspect, rec_src[2])
+    rw, rh, rec_px = fit_to_frame(rec_px, rw, rh, aspect, rec_src[2])
     rec_out = png_encode(rw, rh, rec_px)
 
     def fit_optional(path, label, base_src):
@@ -418,7 +406,7 @@ def main():
                 print(f"warning: {label} art extends past its base sprite's bounds; "
                       f"cropped to its own box (its size may differ slightly in game)",
                       file=sys.stderr)
-        ow, oh, opx = fit_to_frame(opx, ow, oh, args.aspect, box)
+        ow, oh, opx = fit_to_frame(opx, ow, oh, aspect, box)
         return png_encode(ow, oh, opx), note
 
     # Identical-to-base refs (e.g. NoteImage<n>H == NoteImage<n>) add nothing.
@@ -482,10 +470,10 @@ def main():
         canvas[0:bh * row] = body_px
 
     # output pack
-    name = args.name or general.get("Name") or os.path.basename(os.path.normpath(skin_dir))
+    name = name or general.get("Name") or os.path.basename(os.path.normpath(skin_dir))
     slug = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_").lower() or "skin"
     shape_key = "GK_" + re.sub(r"[^A-Z0-9]+", "_", name.upper()).strip("_")
-    out_dir = os.path.join(args.out, slug)
+    out_dir = os.path.join(out, slug)
     os.makedirs(out_dir, exist_ok=True)
 
     with open(os.path.join(out_dir, "head.png"), "wb") as f:
@@ -543,6 +531,26 @@ def main():
         print("taps:    - (all lanes share the base head)")
     print(f"receptor:{os.path.basename(receptor_path)}")
     print(f"tail:    body {bw}x{bh}" + (f" + caps {cap_h}px each" if cap_px else "") + f" -> {bw}x{canvas_h}, slice [{bw // 2 - 1}, {slice_y1}, {bw // 2 + 1}, {slice_y2}]")
+    return out_dir
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Convert an osu!mania skin into a GakuranChart skin pack")
+    ap.add_argument("skin_dir", help="osu! skin folder (contains skin.ini)")
+    ap.add_argument("--out", required=True, help="output Skins directory")
+    ap.add_argument("--keys", type=int, default=4, help="key-count section to use (default 4)")
+    ap.add_argument("--lane", type=int, default=None,
+                    help="1-based lane for the tap/receptor image when lanes differ (default: middle lane)")
+    ap.add_argument("--aspect", type=float, default=1.0,
+                    help="width/height aspect the engine frame expects for head+receptor (default 1.0 = square)")
+    ap.add_argument("--name", default=None, help="display name (default: skin.ini Name)")
+    args = ap.parse_args()
+    ini_path = os.path.join(args.skin_dir, "skin.ini")
+    if not os.path.isfile(ini_path):
+        print(f"error: {ini_path} not found", file=sys.stderr)
+        sys.exit(1)
+    convert_osu_skin(args.skin_dir, args.out, keys=args.keys, lane=args.lane,
+                     aspect=args.aspect, name=args.name)
 
 
 if __name__ == "__main__":

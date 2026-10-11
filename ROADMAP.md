@@ -289,7 +289,7 @@ parent rows and submenu (A2/A3) and is untouched.
   skips armWheelMenu (renderMenu nil → base path) — test submenus via
   G.openPicker, not raw wrap calls.
 
-### 11. Multi-format charts + skins (Etterna, Quaver) — IN PROGRESS (session 8)
+### 11. Multi-format charts + skins (Etterna, Quaver) — DONE (session 8)
 - Converters: `tools/sm2gakuran.py` (.sm dance-single → chart JSON, beats =
   (measure + row/rows)*4, holds `2→3`, rolls `4→3` as holds, mines skipped
   with warning, `#OFFSET` s → offsetMs) and `tools/qua2gakuran.py` (.qp zip
@@ -306,6 +306,22 @@ parent rows and submenu (A2/A3) and is untouched.
 - Loader v2.0.25: SOURCE_TAGS + `Assets/icons/{etterna,quaver}.png`
   (make_source_icons COLORS). Live gate: all new charts load, spot-play one
   .sm + one .qua (SV), both skins apply without vis errors.
+- [x] Unified front-ends (user request): `tools/convert_song.py` (.osz/.osu/
+  .sm/.qp/.qua + dirs, one rank pass) and `tools/convert_skin.py`
+  (auto-detect osu/quaver/etterna) import the tested per-format modules —
+  deliberate import-over-merge so the proven osu path is byte-untouched.
+  Per-format CLIs stay as entry points. Proven: unified song run ==
+  per-format runs byte-identical (6 charts); unified skins == per-format
+  17/17 files; osu2skin refactor regenerates the production nc_skin PNGs
+  7/7 identical.
+- [x] Skin eyeball fixes: quaver tail tips pointed inward (flip convention is
+  skin-specific — qua/etterna use as-is-top/flipped-bottom, opposite of osu);
+  etterna showed one Up arrow everywhere (now real Left/Down/Right per-lane
+  taps) and fat holds (128px doubleres body normalized to the ~58px head).
+  Receptors stay single-arrow (schema has no per-lane receptors).
+- [x] DEPLOYED v2.0.25: 36/36 load (29 osu + 1 local + 2 etterna + 4 quaver),
+  nyan + bozo (6611 SV pts, 0 err) played, both fixed skins 0 vis errors,
+  scores cleared after test plays, workspace == repo.
 
 ## Later / future add-ons
 
