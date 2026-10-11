@@ -15,12 +15,25 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
-### Current task: none
-The last task (v2.0.18 reload hardening) is finished and committed (`8da328b`);
-see "Recent work" below and ROADMAP 9c. Before starting the next one
-(suggestions: settle the A4 tier-colour question below, then ROADMAP item 9
-quality-of-life), write it here with its goal, plan and a progress checklist,
-and keep this section updated after every step (see the protocol above).
+### Current task: deploy v2.0.18 live, then real 4K+ (more than 4 lanes) with a key-binding page
+Goal (user, 2026-10-11): make maps with more than 4 keys playable as such instead of
+only folded to 4 lanes, with a settings page where the player binds the keys used
+for 4K+. Build and test it on the Rayfield UI first; moving it to the game's own
+settings page is optional and comes later. Folding (`fold_columns`) stays as the
+default/fallback for anything the engine cannot render.
+
+Plan / progress (update after every step):
+- [ ] Back up the deployed v2.0.16 loader (outside the workspace), then
+      `python tools/deploy.py --live` (runs check.py) so the workspace has v2.0.18.
+- [ ] Read-only research in the live client: is lane count really fixed per
+      mode (`RhythmChartUtil.getLaneCount`)? who consumes it (note pool, receptors,
+      highway layout, input, judging)? where are the key->lane bindings and the
+      game's own keybind settings page? Record findings here BEFORE designing.
+- [ ] Decide: extra lanes in the engine vs. loader-side rendering/judging; if the
+      engine cannot do it, say so here and fall back to a better fold, not a hack.
+- [ ] Only then design the Rayfield binding page + loader changes (candidate first).
+
+Decisions / findings: (none yet - the first two items are being done now)
 
 ## State
 `GakuranChart.lua` is the single loader, **v2.0.18**. Everything below was
