@@ -15,6 +15,35 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
+### Session 5 (2026-10-11): stage keyboard guard (v2.0.21), chart import answer
+- [x] User bug: Space stands you up from the REAL stage keyboard. Cause (live-verified): seated, Space is
+      Roblox's jump and a jump stands you up; the engine only sinks Space while a session runs AND the
+      game's "lock movement" setting is on (`RhythmEngine:SetMovementLocked`, `RhythmSettingsClient:IsMovementLocked`).
+      The game's own leave bind is Backspace/ButtonB (`RhythmStationLeave`, priority 2050, `InstrumentServiceClient`).
+- [x] Fix = loader section 6.9 (`HK.sg*`, API `G.stageGuard()`): only while `Humanoid.SeatPart ~= nil or Sit` AND
+      character attribute `PlayingInstrument == "Keyboard"`: a CAS bind sinks Space at priority 3100 (below the
+      engine's lane keys 3200 and move-lock 3150, above jump 2000 and station-leave 2050) and a PlayerGui button
+      "EXIT KEYBOARD" (top right, `GakuranChartStageExit`) runs the Backspace routine (WheelOpenRegistry.CloseOpen,
+      then SeatServiceUtils.StandUp, plain `Sit=false` fallback). Torn down in the cleanup, swept on startup.
+      Drums stations are NOT covered (change the `== "Keyboard"` test in `HK.sgState` if wanted).
+- [x] Verified live (client 14512, fake seat = `hum.Sit = true`, VirtualInputManager Space): baseline Space stands the
+      character up; with guard active it stays seated (blocked counter counts the sunk events); during a 7K play
+      with Space as lane 4 the lane still registers (`_receptorPressed[4]` true/false) and our sink sees nothing
+      (engine 3200 wins); button click via `firesignal(btn.Activated)` stands up; re-exec while active = 1 button,
+      1 frame connection; cleanup removes bind and button. NOT verified: a real stage seat (SeatPart, real
+      server-side seat, the real wheel open), touch/gamepad (ButtonA jump is not blocked), where the button sits
+      relative to the game's HUD.
+- [x] Charts: all 9 `.osz` in `FunkyChart_v1.23/` accounted for. 8 hold mania maps and ALL their difficulties are
+      in the workspace (Blue Zenith 10, set304864 6, me & u 5, Ievan 4, Dragon Blade, Day by day, Sound Architect,
+      d_for the DELTA). `1099026 Laur - Unknown Civilization.osz` is osu!standard (mode 0), skipped by the converter
+      unless `--include-nonmania` (approximate conversion): NOT imported, asked the user.
+      The osu! Songs library is NOT imported (user: only the FunkyChart folder).
+- [x] Cleanup done: `__test_7k.json` deleted, stale `GakuranChart_*_candidate.lua` removed (`deploy.py --clean`).
+- [ ] LATER (user request): a FRESH INSTALL of charts. Plan: back up workspace `GakuranCharts` (Charts, Audio,
+      Assets, Scores.json, Settings.json) first, empty Charts/Audio/Assets, then per `.osz`:
+      `python tools/osu2gakuran.py --charts-dir <ws>\GakuranCharts\Charts --audio-dir <ws>\GakuranCharts\Audio
+      --assets-dir <ws>\GakuranCharts\Assets "<osz>"` (ws = `C:\Users\Administrator\AppData\Local\Madium\Workspace`);
+      keep `test_end.json` (28 s test chart, hand-made, not from an .osz). Decide first whether Scores.json stays.
 ### Current task (session 4): import the osu! maps with more than 4 keys as real 4K+ charts
 Goal (user, 2026-10-11): the loader plays 5-7 lanes now (v2.0.19/2.0.20), so import the
 osu! maps that have more than 4 columns as native 4K+ charts instead of 4-lane folds.

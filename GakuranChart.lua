@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.20
+    GakuranChart v2.0.21
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.20"
+local VERSION = "2.0.21"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -109,7 +109,7 @@ pcall(function()
     local gui = player:FindFirstChildOfClass("PlayerGui")
     if gui then
         for _, g in ipairs(gui:GetChildren()) do
-            if g.Name == "GakuranChartUnderframe" or g.Name == "GakuranChartDifficulty" then
+            if g.Name == "GakuranChartUnderframe" or g.Name == "GakuranChartDifficulty" or g.Name == "GakuranChartStageExit" then
                 g:Destroy()
             end
         end
@@ -2565,6 +2565,7 @@ _G.GakuranChartCleanup = function()
         -- re-applies its own selection right after this cleanup runs.
         pcall(deactivateSkin)
         pcall(unbindSv)   -- also disconnects the persistent RenderStepped connection
+        pcall(HK.sgStop)  -- stage keyboard guard: Space bind, button, watchers
         if not playing then
             pcall(restoreAttributes)
             pcall(destroyUnderframe)
@@ -3861,6 +3862,174 @@ if not uiOk then
 end
 
 ----------------------------------------------------------------
+-- 6.9 Stage keyboard guard. Seated at a REAL stage keyboard (Humanoid.SeatPart
+-- set and the character attribute PlayingInstrument == "Keyboard"), Space is
+-- Roblox's jump and a jump stands you up, which ends the play. While that holds:
+--   * a ContextActionService bind sinks Space. Priority 3100 is deliberately
+--     BELOW the engine's lane keys (RhythmLanes, 3200) and its movement lock
+--     (3150), so a session that uses Space as a lane key (5K/7K defaults) still
+--     receives it, and ABOVE the default jump (2000) and the game's own
+--     station-leave bind (RhythmStationLeave, 2050: Backspace / ButtonB keep
+--     working);
+--   * an on-screen EXIT KEYBOARD button runs the same leave routine as the
+--     Backspace bind (close an open wheel, then SeatServiceUtils.StandUp).
+-- Nothing exists while you are not seated at the keyboard (our own forced
+-- plays are not seated, so they are untouched). Torn down by the cleanup.
+----------------------------------------------------------------
+HK.sg = { conns = {}, charConns = {}, bound = false, gui = nil, blocked = 0, exits = 0,
+          action = "GakuranChartStageSpaceGuard", guiName = "GakuranChartStageExit" }
+
+function HK.sgState()
+    local char = player.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return false, nil end
+    local seated = hum.SeatPart ~= nil or hum.Sit
+    return (seated and char:GetAttribute("PlayingInstrument") == "Keyboard") or false, hum
+end
+
+-- Same routine as the game's Backspace bind (InstrumentServiceClient
+-- onStationLeave), except that a click always leaves: an open wheel is closed
+-- AND the character stands up.
+function HK.sgLeave()
+    HK.sg.exits += 1
+    local okC, reg = pcall(function() return require(RS.Shared.Services.WheelOpenRegistry) end)
+    if okC and type(reg) == "table" and type(reg.CloseOpen) == "function" then
+        pcall(reg.CloseOpen)
+    end
+    local char = player.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return false end
+    local okS, seatUtils = pcall(function()
+        return require(RS.Shared.Services.SeatService.SeatServiceUtils)
+    end)
+    if okS and type(seatUtils) == "table" and type(seatUtils.StandUp) == "function"
+        and pcall(seatUtils.StandUp, hum) then
+        return true
+    end
+    -- fallback if the game's helper moved: plain Roblox stand-up
+    pcall(function() hum.Sit = false end)
+    pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+    return true
+end
+
+function HK.sgBind()
+    local sg = HK.sg
+    if sg.bound then return end
+    local okB = pcall(function()
+        game:GetService("ContextActionService"):BindActionAtPriority(sg.action, function()
+            sg.blocked += 1
+            return Enum.ContextActionResult.Sink
+        end, false, 3100, Enum.KeyCode.Space)
+    end)
+    sg.bound = okB
+end
+
+function HK.sgUnbind()
+    local sg = HK.sg
+    pcall(function() game:GetService("ContextActionService"):UnbindAction(sg.action) end)
+    sg.bound = false
+end
+
+function HK.sgShow()
+    local sg = HK.sg
+    if sg.gui and sg.gui.Parent then return end
+    local pgui = player:FindFirstChildOfClass("PlayerGui")
+    if not pgui then return end
+    local gui = Instance.new("ScreenGui")
+    gui.Name = sg.guiName
+    gui.ResetOnSpawn = false
+    gui.DisplayOrder = 40
+    gui.IgnoreGuiInset = false
+    local btn = Instance.new("TextButton")
+    btn.Name = "Exit"
+    btn.AnchorPoint = Vector2.new(1, 0)
+    btn.Position = UDim2.new(1, -16, 0, 12)
+    btn.Size = UDim2.new(0, 176, 0, 42)
+    btn.BackgroundColor3 = Color3.fromRGB(34, 28, 78)
+    btn.BackgroundTransparency = 0.08
+    btn.AutoButtonColor = true
+    btn.BorderSizePixel = 0
+    btn.Font = Enum.Font.GothamBlack
+    btn.Text = "EXIT KEYBOARD"
+    btn.TextSize = 16
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.Parent = gui
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = btn
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(255, 48, 138)
+    stroke.Thickness = 2
+    stroke.Parent = btn
+    btn.Activated:Connect(function()
+        if _G.GakuranChartGen ~= MYGEN then return end
+        pcall(HK.sgLeave)
+    end)
+    gui.Parent = pgui
+    sg.gui = gui
+end
+
+function HK.sgHide()
+    local sg = HK.sg
+    if sg.gui then
+        pcall(function() sg.gui:Destroy() end)
+        sg.gui = nil
+    end
+end
+
+function HK.sgUpdate()
+    if _G.GakuranChartGen ~= MYGEN or HK.cleaned then
+        HK.sgStop()
+        return
+    end
+    if (HK.sgState()) then
+        HK.sgBind()
+        HK.sgShow()
+    else
+        HK.sgUnbind()
+        HK.sgHide()
+    end
+end
+
+function HK.sgWatch(char)
+    local sg = HK.sg
+    for _, c in ipairs(sg.charConns) do pcall(function() c:Disconnect() end) end
+    sg.charConns = {}
+    if char then
+        table.insert(sg.charConns, char:GetAttributeChangedSignal("PlayingInstrument"):Connect(HK.sgUpdate))
+        local hum = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
+        if hum then
+            table.insert(sg.charConns, hum:GetPropertyChangedSignal("SeatPart"):Connect(HK.sgUpdate))
+            table.insert(sg.charConns, hum:GetPropertyChangedSignal("Sit"):Connect(HK.sgUpdate))
+        end
+    end
+    HK.sgUpdate()
+end
+
+function HK.sgStart()
+    local sg = HK.sg
+    table.insert(sg.conns, player.CharacterAdded:Connect(function(c) task.spawn(HK.sgWatch, c) end))
+    task.spawn(HK.sgWatch, player.Character)
+end
+
+function HK.sgStop()
+    local sg = HK.sg
+    for _, c in ipairs(sg.conns) do pcall(function() c:Disconnect() end) end
+    for _, c in ipairs(sg.charConns) do pcall(function() c:Disconnect() end) end
+    sg.conns, sg.charConns = {}, {}
+    HK.sgUnbind()
+    HK.sgHide()
+end
+
+function HK.sgStatus()
+    local sg = HK.sg
+    local active = HK.sgState()
+    return { active = active, bound = sg.bound, button = sg.gui ~= nil and sg.gui.Parent ~= nil,
+             blocked = sg.blocked, exits = sg.exits, watching = #sg.conns > 0 }
+end
+
+if _G.GakuranChartGen == MYGEN then HK.sgStart() end
+----------------------------------------------------------------
 -- 7. Programmatic API
 -- (the re-execution cleanup now lives in 5.9, registered before the UI)
 ----------------------------------------------------------------
@@ -3876,6 +4045,8 @@ _G.GakuranChart = {
     end,
     play = playChart,
     stop = stopChart,
+    -- Stage keyboard guard status (Space block + EXIT KEYBOARD button), see 6.9.
+    stageGuard = function() return HK.sgStatus() end,
     current = function() return currentChartPath end,
     skins = listSkinPacks,
     -- Local scores. Never sent anywhere; GakuranCharts/Scores.json.
