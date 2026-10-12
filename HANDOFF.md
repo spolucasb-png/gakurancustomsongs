@@ -1,5 +1,7 @@
 # Handoff (for the next chat session)
 
+## Multi-game direction (user decisions, session 29): next target = Project Afternight (Roblox game; local Afternight-named files are old/unrelated — ignore). Executor: Madium-only. Server-cleanliness: desired but NOT hard requirement. Chart schema: frozen during adapter exploration. Standing by for the Afternight inspection task.
+
 ## Branch check (session 24, review-prompted): `main` == `origin/main` == `a1c24bc`, no ahead/behind, remote contains HEAD. The stale 831-line GitHub `main` view was cache — no pointer issue, no fix needed or made.
 
 ## Standing constraint (agreed session 23): the verified `.ssc` conversion path stays UNCHANGED until gameplay evidence shows a defect. New tests (synthetic stops/reverses, multi-BPM) observe first, change code only with a failing measurement in hand.
