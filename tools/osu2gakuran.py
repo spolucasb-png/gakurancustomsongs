@@ -39,6 +39,8 @@ import sys
 import zipfile
 from pathlib import Path
 
+from zipstage import convert_archive
+
 FORMAT_VERSION = 1
 MODE_NAMES = {0: "osu!standard", 1: "osu!taiko", 2: "osu!catch", 3: "osu!mania"}
 # Gakuran instrument modes and their lane counts (from RhythmChartUtil.getLaneCount)
@@ -685,15 +687,9 @@ def main():
     inp = args.input
     results = []
     if inp.suffix.lower() == ".osz":
-        with zipfile.ZipFile(inp) as zf:
-            tmp = args.charts_dir / "_osz_tmp"
-            tmp.mkdir(parents=True, exist_ok=True)
-            zf.extractall(tmp)
-            for osu in sorted(tmp.glob("*.osu")):
-                c = convert_file(osu, args.charts_dir, args.audio_dir, args.assets_dir, **kw)
-                if c:
-                    results.append(c)
-            shutil.rmtree(tmp, ignore_errors=True)
+        results.extend(convert_archive(inp, "osz", ".osu", convert_file,
+                                       args.charts_dir, args.audio_dir,
+                                       args.assets_dir, kw))
     elif inp.suffix.lower() == ".osu":
         c = convert_file(inp, args.charts_dir, args.audio_dir, args.assets_dir, **kw)
         if c:

@@ -46,6 +46,11 @@ LIST_SECTIONS = ("TimingPoints", "SliderVelocities", "HitObjects")
 BEAT_DECIMALS = 10
 
 
+# Archive staging lives in zipstage (shared with the osu! frontend paths);
+# convert_qp below is its only Quaver-side caller.
+from zipstage import convert_archive
+
+
 def parse_qua(text: str):
     """Return (scalars, lists) for the fields a conversion needs."""
     scalars, lists = {}, {k: [] for k in LIST_SECTIONS}
@@ -243,17 +248,9 @@ def convert_file(qua_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
 
 def convert_qp(qp_path: Path, charts_dir: Path, audio_dir: Path, asset_dir: Path,
                **kw):
-    """Convert every .qua inside a .qp package; return the chart dicts."""
-    results = []
-    with zipfile.ZipFile(qp_path) as zf:
-        with tempfile.TemporaryDirectory(prefix="qua_") as tmp:
-            tmp = Path(tmp)
-            zf.extractall(tmp)
-            for qua in sorted(tmp.glob("*.qua")):
-                c = convert_file(qua, charts_dir, audio_dir, asset_dir, **kw)
-                if c:
-                    results.append(c)
-    return results
+    """Convert every top-level .qua inside a .qp package; return the chart dicts."""
+    return convert_archive(qp_path, "qp", ".qua", convert_file,
+                           charts_dir, audio_dir, asset_dir, kw)
 
 
 def main():

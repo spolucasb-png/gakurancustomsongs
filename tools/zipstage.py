@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Shared archive staging for the song converters (.osz/.qp are ZIPs).
+
+safe_extract() replaces bare extractall(): unique staging directories come
+from tempfile.TemporaryDirectory at the call sites (never inside the output
+tree), members are validated before any byte is written, and cleanup rides
+the context manager even when conversion raises.
+"""
+import shutil
+import sys
+import tempfile
+import zipfile
+from pathlib import Path
+
+
+def safe_extract(zf: zipfile.ZipFile, dest: Path) -> int:
+    """Extract ZIP members into dest, refusing hostile archives.
+
+    Absolute paths, drive letters, '..' escapes and duplicate member paths
+    raise ValueError before anything outside dest is touched (fail loudly; a
+    hostile archive must not partially convert). Returns the file count.
+    """
+    dest = dest.resolve()
+    seen = set()
+    count = 0
+    for info in zf.infolist():
+        name = info.filename.replace("\\", "/")
+        if not name or name.endswith("/"):
+            continue
+        if name in seen:
+            raise ValueError(f"duplicate archive member: {info.filename!r}")
+        seen.add(name)
+        target = (dest / name).resolve()
+        try:
+            target.relative_to(dest)
+        except ValueError:
+            raise ValueError(f"archive member escapes destination: {info.filename!r}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(info) as src, open(target, "wb") as out:
+            shutil.copyfileobj(src, out)
+        count += 1
+    return count
+
+
+def nested_charts(root: Path, suffix: str) -> list:
+    """Chart files below the extraction root (converters read top-level only).
+
+    Returned so callers can warn loudly instead of silently ignoring them.
+    """
+    top = {p for p in root.glob(f"*{suffix}")}
+    return sorted(set(root.rglob(f"*{suffix}")) - top)
+
+
+def convert_archive(arch_path: Path, kind: str, suffix: str, convert_fn,
+                    charts_dir: Path, audio_dir: Path, assets_dir: Path, kw: dict):
+    """Stage a .osz/.qp-style archive and convert its top-level charts.
+
+    kind ("osz"/"qp") labels messages; convert_fn(chart_path, charts_dir,
+    audio_dir, assets_dir, **kw) returns one chart, a list, or a falsy skip.
+    Staging is a unique TemporaryDirectory outside the output tree (never the
+    legacy charts/_osz_tmp); members are validated before extraction; nested
+    charts warn loudly instead of being silently ignored; corrupt/hostile
+    archives skip with a message and convert nothing. Returns chart list.
+    """
+    out = []
+    try:
+        zf = zipfile.ZipFile(arch_path)
+    except zipfile.BadZipFile:
+        print(f"  - skipped '{arch_path.name}': not a valid .{kind} archive",
+              file=sys.stderr)
+        return out
+    with zf:
+        with tempfile.TemporaryDirectory(prefix=f"{kind}_") as tmp:
+            tmp = Path(tmp)
+            try:
+                safe_extract(zf, tmp)
+            except ValueError as e:
+                print(f"  - skipped '{arch_path.name}': {e}", file=sys.stderr)
+                return out
+            for member in sorted(tmp.glob(f"*{suffix}")):
+                c = convert_fn(member, charts_dir, audio_dir, assets_dir, **kw)
+                if isinstance(c, list):
+                    out.extend(c)
+                elif c:
+                    out.append(c)
+            for n in nested_charts(tmp, suffix):
+                print(f"  ! '{n}' nested inside '{arch_path.name}': NOT converted "
+                      f"(top-level charts only)", file=sys.stderr)
+    return out

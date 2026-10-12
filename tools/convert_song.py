@@ -24,6 +24,7 @@ import osu2gakuran as osu
 import qua2gakuran as qua
 import sm2gakuran as sm
 from osu2gakuran import MAX_KEYBOARD_LANES, assign_ranks
+from zipstage import convert_archive
 
 SONG_DEFAULT_SOURCE = {"osu": "osu", "sm": "etterna", "qua": "quaver"}
 
@@ -34,18 +35,8 @@ def convert_osu_path(osu_path, charts, audio, assets, args):
               max_lanes=args.max_lanes,
               source=args.source or SONG_DEFAULT_SOURCE["osu"])
     if osu_path.suffix.lower() == ".osz":
-        out = []
-        with zipfile.ZipFile(osu_path) as zf:
-            tmp = charts / "_osz_tmp"
-            tmp.mkdir(parents=True, exist_ok=True)
-            zf.extractall(tmp)
-            for o in sorted(tmp.glob("*.osu")):
-                c = osu.convert_file(o, charts, audio, assets, **kw)
-                if c:
-                    out.append(c)
-            import shutil
-            shutil.rmtree(tmp, ignore_errors=True)
-        return out
+        return convert_archive(osu_path, "osz", ".osu", osu.convert_file,
+                               charts, audio, assets, kw)
     c = osu.convert_file(osu_path, charts, audio, assets, **kw)
     return [c] if c else []
 
