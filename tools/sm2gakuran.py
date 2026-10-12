@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""StepMania .sm (dance-single) -> GakuranCharts JSON converter.
+"""StepMania .sm/.ssc (dance-single) -> GakuranCharts JSON converter.
 
 Same chart schema as tools/osu2gakuran.py (formatVersion 1, beats-based
 notes, scrollChanges/animationBpmChanges, songId/tier/rank grouping) and the
@@ -11,13 +11,19 @@ Mapping notes:
     no rolls), `M` mine and `F` fake/L-lift skipped with a warning (no engine
     equivalent)
   * #BPMS beat=bpm segments (these files have one); #OFFSET seconds -> offsetMs
-  * a non-empty #STOPS refuses the chart: the engine cannot freeze time and a
-    silent desync is worse than a skip
+  * #SCROLLS beat=ratio -> scrollChanges (verbatim beats on the notes' axis,
+    same-beat collapses to last-in-file, rates verbatim incl. zero/negative)
+  * a non-empty #SPEEDS warns LOUDLY and converts WITHOUT it (the engine
+    cannot do speed ramps); a non-empty #STOPS refuses the chart: the engine
+    cannot freeze time and a silent desync is worse than a skip
+  * .ssc files use one #STEPSTYPE..#NOTES block per chart (each becomes its
+    own JSON); old-style .sm files keep the single colon-joined #NOTES block
   * dance-single is 4 columns, so no fold path (other stepstypes are skipped)
 
 Usage:
     python tools/sm2gakuran.py song.sm --charts-dir C --audio-dir A --assets-dir S
-    python tools/sm2gakuran.py etterna_folder/ --charts-dir C ...   (every .sm inside)
+    python tools/sm2gakuran.py song.ssc --charts-dir C --audio-dir A --assets-dir S
+    python tools/sm2gakuran.py etterna_folder/ --charts-dir C ...   (every .sm/.ssc inside)
 """
 import argparse
 import json
@@ -66,42 +72,65 @@ def beat_to_ms(beat: float, segs) -> float:
     return ms
 
 
-def convert_file(sm_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path,
-                 source="etterna"):
-    tags = parse_sm(sm_path.read_text(encoding="utf-8", errors="replace"))
-    title = tags.get("TITLE", "Unknown").strip() or "Unknown"
-    artist = tags.get("ARTIST", "Unknown").strip() or "Unknown"
+def parse_scrolls(raw: str):
+    """#SCROLLS beat=ratio pairs -> [(beat, rate)] in file order.
 
-    segs = parse_bpms(tags.get("BPMS", ""))
-    if not segs:
-        print(f"  - skipped '{sm_path.name}': no valid #BPMS", file=sys.stderr)
-        return None
-    if tags.get("STOPS", "").strip():
-        print(f"  - skipped '{sm_path.name}': #STOPS need a time freeze the engine "
-              f"cannot do (would desync)", file=sys.stderr)
-        return None
-    ref_bpm = round(segs[0][1], 4)
-    ref_bl = 60000.0 / segs[0][1]
+    Malformed entries are skipped (caller sees none of them; an empty tag
+    yields no points, same as a missing tag).
+    """
+    pts = []
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        b, v = part.split("=", 1)
+        try:
+            pts.append((float(b), float(v)))
+        except ValueError:
+            continue
+    return pts
 
-    notes_blob = tags.get("NOTES")
-    if not notes_blob:
-        print(f"  - skipped '{sm_path.name}': no #NOTES block", file=sys.stderr)
-        return None
-    fields = [f.strip() for f in notes_blob.split(":", 5)]
-    while len(fields) < 6:
-        fields.append("")
-    stepstype, author, difficulty, meter = fields[0], fields[1], fields[2], fields[3]
-    if stepstype != "dance-single":
-        print(f"  - skipped '{difficulty}': stepstype {stepstype} is not dance-single",
-              file=sys.stderr)
-        return None
-    author = author or "Unknown"
-    difficulty = difficulty or "Normal"
 
+def parse_chart_blocks(text: str, tags: dict):
+    """Return [(stepstype, author, difficulty, meter, measures_text)] in file order.
+
+    New-style .ssc carries one #STEPSTYPE..#NOTES block per chart (separate
+    #STEPSTYPE/#DESCRIPTION/#DIFFICULTY/#METER/#NOTES tags); old-style .sm
+    has a single colon-joined #NOTES block. parse_sm's dict keeps only the
+    LAST repeated tag, so new-style blocks are re-scanned here in file order.
+    """
+    blocks = []
+    for m in re.finditer(r"#STEPSTYPE:(.*?);(.*?)#NOTES:(.*?);", text, re.DOTALL):
+        stepstype = m.group(1).strip()
+        middle, notes_text = m.group(2), m.group(3)
+
+        def one(tag):
+            mm = re.search(r"#" + tag + r":(.*?);", middle, re.DOTALL)
+            return mm.group(1).strip() if mm else ""
+
+        blocks.append((stepstype, one("DESCRIPTION") or "Unknown",
+                       one("DIFFICULTY") or "Normal", one("METER"), notes_text))
+    if blocks:
+        return blocks
+    if tags.get("NOTES"):
+        fields = [f.strip() for f in tags["NOTES"].split(":", 5)]
+        while len(fields) < 6:
+            fields.append("")
+        return [(fields[0], fields[1] or "Unknown", fields[2] or "Normal",
+                 fields[3], fields[5])]
+    return []
+
+
+def parse_measures(measures_text: str):
+    """Comma-separated measure rows -> (notes, warnings, fatal).
+
+    fatal is None on success, else an error string the caller prints (and
+    aborts the file over), matching the old inline behavior exactly.
+    """
     notes, warnings = [], []
     mines = fakes = 0
     open_hold = {}
-    measures = [m for m in fields[5].split(",")]
+    measures = [m for m in measures_text.split(",")]
     for mi, meas in enumerate(measures):
         rows = [ln.strip() for ln in meas.splitlines()
                 if ln.strip() and not ln.strip().startswith("//")]
@@ -109,8 +138,7 @@ def convert_file(sm_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path,
             continue
         width = max(len(r) for r in rows)
         if width != 4:
-            print(f"  ! ERROR: measure {mi + 1} is {width} columns, not 4", file=sys.stderr)
-            return None
+            return None, [], f"measure {mi + 1} is {width} columns, not 4"
         for ri, row in enumerate(rows):
             beat = round((mi + ri / len(rows)) * 4.0, 4)
             for ci, ch in enumerate(row[:4]):
@@ -142,15 +170,56 @@ def convert_file(sm_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path,
     if fakes:
         warnings.append(f"{fakes} fake/lift(s) skipped (no engine equivalent)")
     notes.sort(key=lambda n: (n["b"], n["l"]))
-    if not notes:
-        print(f"  ! ERROR: no convertible notes in '{difficulty}'", file=sys.stderr)
-        return None
+    return notes, warnings, None
 
-    id_stem = title
-    if not re.search(r"[a-zA-Z0-9]", title):
-        id_stem = sm_path.parent.name
-    song_id = sanitize_id(id_stem)
-    chart_id = sanitize_id(f"{id_stem}_{difficulty}")
+
+def convert_file(sm_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path,
+                 source="etterna"):
+    """Convert one .sm/.ssc file -> list of charts (one per dance-single block)."""
+    text = sm_path.read_text(encoding="utf-8", errors="replace")
+    tags = parse_sm(text)
+    title = tags.get("TITLE", "Unknown").strip() or "Unknown"
+    artist = tags.get("ARTIST", "Unknown").strip() or "Unknown"
+
+    segs = parse_bpms(tags.get("BPMS", ""))
+    if not segs:
+        print(f"  - skipped '{sm_path.name}': no valid #BPMS", file=sys.stderr)
+        return []
+    if tags.get("STOPS", "").strip():
+        print(f"  - skipped '{sm_path.name}': #STOPS need a time freeze the engine "
+              f"cannot do (would desync)", file=sys.stderr)
+        return []
+    ref_bpm = round(segs[0][1], 4)
+
+    warnings = []
+    speeds_raw = tags.get("SPEEDS", "").strip()
+    if speeds_raw:
+        n_speeds = len([p for p in speeds_raw.split(",") if p.strip()])
+        warnings.append(f"#SPEEDS has {n_speeds} entrie(s): SKIPPED - the engine "
+                        f"cannot do speed ramps, so this chart converts WITHOUT "
+                        f"them (sections under #SPEEDS scroll at the #SCROLLS rate "
+                        f"and may look wrong)")
+
+    # #SCROLLS beat=ratio -> scrollChanges. Beats are the file's musical beats,
+    # the same axis the notes below are stored on (exact for single-BPM files;
+    # multi-BPM files share the notes' existing ref-BPM approximation). Same
+    # beat twice collapses to the LAST file entry (Quaver semantics); rates go
+    # in VERBATIM (the loader integral handles zero/negatives, session 16).
+    scroll_changes = []
+    won = {}
+    for b, r in parse_scrolls(tags.get("SCROLLS", "")):
+        if r != r or abs(r) == float("inf"):
+            warnings.append(f"non-finite #SCROLLS rate {r} at beat {b} (dropped)")
+            continue
+        won[b] = round(r, 4)
+    for b in sorted(won):
+        scroll_changes.append({"b": b, "rate": won[b]})
+
+    blocks = parse_chart_blocks(text, tags)
+    if not blocks:
+        print(f"  - skipped '{sm_path.name}': no #NOTES block", file=sys.stderr)
+        return []
+
     try:
         offset_ms = round(float(tags.get("OFFSET", "0") or 0) * 1000)
     except ValueError:
@@ -160,70 +229,116 @@ def convert_file(sm_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path,
         {"t": round(beat_to_ms(b, segs) / 1000.0, 3), "bpm": round(bpm, 2)}
         for b, bpm in segs[1:]
     ]
-    duration = max(n["b"] + n["d"] for n in notes) * 60.0 / ref_bpm
-    chart = {
-        "formatVersion": FORMAT_VERSION,
-        "id": chart_id,
-        "title": title,
-        "artist": artist,
-        "charter": f"{author} (StepMania dance-single {difficulty} {meter}, converted)",
-        "bpm": ref_bpm,
-        "animationbpm": ref_bpm,
-        "startAt": 0,
-        "offsetMs": offset_ms,
-        "approach": 5,
-        "mode": "Keyboard",
-        "difficulty": {"Keyboard": difficulty},
-        "charts": {"Keyboard": notes},
-        "noteCount": len(notes),
-        "duration": round(duration, 2),
-        "songId": song_id,
-        "tier": tier_for(len(notes) / max(duration, 1.0)),
-        "rank": 1,
-        "sourceMode": "dance-single",
-        "sourceKeys": 4,
-        "source": source or "etterna",
-    }
-    if anim_changes:
-        chart["animationBpmChanges"] = anim_changes
+
+    id_stem = title
+    if not re.search(r"[a-zA-Z0-9]", title):
+        id_stem = sm_path.parent.name
+    song_id = sanitize_id(id_stem)
+
+    # Validate every dance-single block BEFORE writing anything (one bad block
+    # aborts the file, as before).
+    parsed = []
+    for stepstype, author, difficulty, meter, measures_text in blocks:
+        if stepstype != "dance-single":
+            print(f"  - skipped '{difficulty}': stepstype {stepstype} is not dance-single",
+                  file=sys.stderr)
+            continue
+        notes, nwarnings, fatal = parse_measures(measures_text)
+        if fatal is not None:
+            print(f"  ! ERROR: {fatal}", file=sys.stderr)
+            return []
+        if not notes:
+            print(f"  ! ERROR: no convertible notes in '{difficulty}'", file=sys.stderr)
+            return []
+        parsed.append((author, difficulty, meter, notes, nwarnings))
+    if not parsed:
+        return []
 
     music = tags.get("MUSIC", "").strip()
     src_audio = sm_path.parent / music if music else None
+    audio_name = None
     if src_audio and src_audio.exists():
-        dst = place_media(src_audio, audio_dir, song_id)
-        chart["audioFile"] = f"GakuranCharts/Audio/{dst.name}"
+        audio_name = f"GakuranCharts/Audio/{place_media(src_audio, audio_dir, song_id).name}"
     else:
-        warnings.append("audio file not found next to .sm; chart has no audioFile")
+        warnings.append(f"audio file not found next to {sm_path.suffix}; chart has no audioFile")
     bg = tags.get("BACKGROUND", "").strip()
+    bg_name = None
     if bg and (sm_path.parent / bg).exists():
-        dst = place_media(sm_path.parent / bg, asset_dir, song_id)
-        chart["backgroundFile"] = f"GakuranCharts/Assets/{dst.name}"
+        bg_name = f"GakuranCharts/Assets/{place_media(sm_path.parent / bg, asset_dir, song_id).name}"
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"{chart_id}.json").write_text(
-        json.dumps(chart, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    print(f"  -> {chart_id}.json: {len(notes)} notes, {ref_bpm} BPM, {duration:.1f}s")
+    charts = []
+    used_ids = set()
+    for author, difficulty, meter, notes, nwarnings in parsed:
+        chart_id = sanitize_id(f"{id_stem}_{difficulty}")
+        if chart_id in used_ids:
+            i = 2
+            while f"{chart_id}_{i}" in used_ids:
+                i += 1
+            chart_id = f"{chart_id}_{i}"
+        used_ids.add(chart_id)
+        duration = max(n["b"] + n["d"] for n in notes) * 60.0 / ref_bpm
+        chart = {
+            "formatVersion": FORMAT_VERSION,
+            "id": chart_id,
+            "title": title,
+            "artist": artist,
+            "charter": f"{author} (StepMania dance-single {difficulty} {meter}, converted)",
+            "bpm": ref_bpm,
+            "animationbpm": ref_bpm,
+            "startAt": 0,
+            "offsetMs": offset_ms,
+            "approach": 5,
+            "mode": "Keyboard",
+            "difficulty": {"Keyboard": difficulty},
+            "charts": {"Keyboard": notes},
+            "noteCount": len(notes),
+            "duration": round(duration, 2),
+            "songId": song_id,
+            "tier": tier_for(len(notes) / max(duration, 1.0)),
+            "rank": 1,
+            "sourceMode": "dance-single",
+            "sourceKeys": 4,
+            "source": source or "etterna",
+        }
+        if anim_changes:
+            chart["animationBpmChanges"] = anim_changes
+        if scroll_changes:
+            chart["scrollChanges"] = scroll_changes
+        if audio_name:
+            chart["audioFile"] = audio_name
+        if bg_name:
+            chart["backgroundFile"] = bg_name
+
+        (out_dir / f"{chart_id}.json").write_text(
+            json.dumps(chart, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        print(f"  -> {chart_id}.json: {len(notes)} notes, {ref_bpm} BPM, {duration:.1f}s"
+              + (f", {len(scroll_changes)} SV points" if scroll_changes else ""))
+        for w in nwarnings:
+            print(f"  ! {w}", file=sys.stderr)
+        charts.append(chart)
     for w in warnings:
         print(f"  ! {w}", file=sys.stderr)
-    return chart
+    return charts
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Convert StepMania .sm maps to GakuranCharts JSON")
-    ap.add_argument("input", type=Path, help=".sm file or directory of them")
+    ap = argparse.ArgumentParser(description="Convert StepMania .sm/.ssc maps to GakuranCharts JSON")
+    ap.add_argument("input", type=Path, help=".sm/.ssc file or directory of them")
     ap.add_argument("--charts-dir", type=Path, required=True)
     ap.add_argument("--audio-dir", type=Path, required=True)
     ap.add_argument("--assets-dir", type=Path, required=True)
     ap.add_argument("--source", default="etterna",
                     help="origin engine tag written into each chart (default etterna)")
     args = ap.parse_args()
-    sm_files = sorted(args.input.rglob("*.sm")) if args.input.is_dir() else [args.input]
+    sm_files = (sorted(p for p in args.input.rglob("*") if p.is_file()
+                      and p.suffix.lower() in {".sm", ".ssc"})
+                if args.input.is_dir() else [args.input])
     results = []
     for sm in sm_files:
-        c = convert_file(sm, args.charts_dir, args.audio_dir, args.assets_dir,
-                         source=args.source or "etterna")
-        if c:
-            results.append(c)
+        results.extend(convert_file(sm, args.charts_dir, args.audio_dir,
+                                    args.assets_dir,
+                                    source=args.source or "etterna"))
     assign_ranks(args.charts_dir, results)
     print(f"Done: {len(results)} chart(s) converted")
     return 0 if results else 1

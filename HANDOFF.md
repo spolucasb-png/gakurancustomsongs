@@ -15,6 +15,13 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
+### Session 18 (2026-10-12): .ssc + #SCROLLS support in sm2gakuran.py (Etterna SV test path)
+- External report verified from the code: converter globbed `*.sm` only and never read `#SCROLLS`/`#SPEEDS`. Scanner (`Downloads\\find_stepmania_sv.py`, NOT copied into repo) run against the LOCAL pack: 264 files, 9 candidates, all `#SCROLLS`, zero `#SPEEDS`/zero-or-negative anywhere locally.
+- Implemented: `.ssc` discovery + new-style block parser (`#STEPSTYPE..#NOTES` per chart; parse_sm dict-overwrite keeps last tag so blocks re-scanned in file order), `#SCROLLS` -> `scrollChanges` (verbatim beats on notes' axis, same-beat last-in-file wins, rates verbatim incl. 0, rounded 4 like qua), `#SPEEDS` loud SKIPPED warning (non-fatal), `#STOPS` still refuses. `convert_file` now returns a LIST of charts (main/test updated).
+- Gates: new `tools/test_sm_scrolls.py` 6/6; qua 8/8, fold 10/10, check.py 18 files (was 17 — the new test file). Refactor byte-stability proven: HEAD vs new on 6 real `.sm` files = 6/6 byte-identical JSON.
+- April Showers converted to SCRATCH ONLY (`$env:TEMP\\april`, never workspace): `april_showers_medium.json`, 809 notes (643 holds), 158 BPM, 16 SV points verbatim (0.2<->3.0 wobble beats 113.5-115, 0.75 dip at 242), audio+bg wired. NOT live-tested, NOT deployed — awaiting user eyeball decision.
+- Honest scope limit: no local chart has zero/negative scrolls or `#SPEEDS`, so this path tests rate-variation fidelity only, not stop/reverse parity.
+
 ### Session 17 (2026-10-12): zero-SV fix LIVE-VERIFIED by user, item 13 CLOSED
 - User fixed the client and confirmed in-game: pauses/teleports on the reconverted charts now match Quaver ("IT TOOK ALL THE DAMN DAY TO MAKE THIS WORK, im super happy"). Per the standing decision, user eyeball is the final authority on feel — item 13 is CLOSED. Honest scope note: this verification is user-side gameplay, NOT my sampler run (no evals ran after the rejoin except `runtime_status`; the earlier queue wedge was never re-probed — do not cite sampler numbers for this turn).
 - Root-cause record: converter missing-`Multiplier` default 1.0 (not the renderer). The session-15 "killed theories" work stands as renderer-healthy evidence — the renderer was never at fault. Session-16 line "Live verification BLOCKED" below is now superseded.
