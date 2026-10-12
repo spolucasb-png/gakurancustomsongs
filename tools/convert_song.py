@@ -57,7 +57,7 @@ def main():
                     choices=range(4, MAX_KEYBOARD_LANES + 1))
     args = ap.parse_args()
 
-    osu.begin_batch()
+    osu.begin_batch(args.charts_dir)
     results = []
     for inp in args.input:
         if inp.is_dir():
