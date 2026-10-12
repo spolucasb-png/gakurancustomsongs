@@ -455,6 +455,7 @@ The plan is now the parent-row + wheel difficulty submenu design in "Current foc
 - [x] (session 15) Dispatch order verified on Real (newest-first): loader ordering design holds; engine-overwrite theory dead.
 - [x] (session 15) Quaver position math mapped from source (per-segment long truncation, TR=100, float32 SVs): real but small, not the main cause. Same-time `IndexAtTime` semantics still open. Paths in HANDOFF session 15.
 - [ ] BLOCKED (session 15): loader cannot execute on Real — `execute-file` refuses `getgc(true)` files (loader needs it 3x for discovery); `filtergc` dead-ends, `gc-scan` can't supply live refs. Real workspace IS deployed (109 files, v2.0.30, no Scores.json). Needs user decision (try getgc live / redesign discovery / keep Madium for loader tests) before any live test. Details in HANDOFF session 15.
+- [x] (session 15) User decision: BACK TO MADIUM for loader tests ("real is bugged or sum"); Real parked for inspection only. Next: resume the SV pause/teleport capture on Madium (ball_hard; song timestamp still unknown — ask when starting).
 - [ ] (session 15) User offered to disable Block-Vulnerabilities entries — advised surgical-only
 (find the getgc entry; the refusal fires on comments so the gate is likely server-side and toggles
 may not lift it). Parallel no-risk path: getgc-free discovery via getnilinstances+require (proven

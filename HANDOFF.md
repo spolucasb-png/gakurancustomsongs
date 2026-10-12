@@ -16,6 +16,12 @@ committed is lost. So:
 5. Never claim something works unless it was run; mark untested items as untested.
 
 ### Session 15 (2026-10-12): continue SV pause/teleport checks (cut off mid-step)
+- User decision (answering "how to unblock Real"): BACK TO MADIUM, "real is
+  bugged or sum". Real work is parked, not deleted: the deployed files stay
+  in Real workspace for later, and the getgc-free discovery research
+  (getnilinstances+require proven, controller route open) stays valid as a
+  fallback. Madium client 15452 alive at decision time (fresh reconnect).
+  Loader testing resumes on Madium; Real keeps inspection-only use.
 - Finished the cut-off step: fixed the 1ms sim path bug (relative path had resolved against System32 — use the absolute `_scratch_convert` path + `$env:GK_STEP`), reran ball_hard + bozo at 1ms/94k frames each: still 0% missing, capped=0. H1 (spawn drops notes) is dead at two sampling rates (60Hz + 1ms).
 - RenderStepped dispatch order VERIFIED on Real (client 7256) with an order probe: newest-first (`2,1,2,1...`), same as Madium. The loader's "older connection fires later" design holds; the engine-overwrites-loader theory (which would have explained "keep scrolling" exactly) is dead.
 - Quaver position math mapped from source (develop branch, read — not memory): `ScrollGroupControllerKeys.cs` builds positions per segment as `(long)(Δt * mult * TrackRounding)` (EACH segment truncated to long), `TrackRounding = 100`, SV StartTime/Multiplier are float32 (`SliderVelocityInfo.cs`), ISV + NaN→0 handled, sign flips tracked via `SVDirectionChange`, rendering is position-ranged (spatial hash + `RenderThreshold`), track position follows the visual audio offset. Impact of the truncation: sub-pixel typical, small cumulative worst case — real but NOT the main cause. `IndexAtTime`/`InsertSorted` exact same-time semantics still open (not in Helpers/ListHelper.cs; likely Qua.cs or game-side — next agent: fetch before relying on last-in-file).
