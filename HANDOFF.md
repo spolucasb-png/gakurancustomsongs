@@ -17,6 +17,13 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
+### Session 24 (2026-10-12): synthetic stop/reverse chart BUILT (scratch-only, not deployed)
+- `_scratch_convert\\synth_sv\\`: `synth_sv_test.ssc` (single 150 BPM, 13 taps, 8 `#SCROLLS`) + generated 25 s `silent.wav` (stdlib wave, so Etterna can time it) + unified-frontend output + staged drop-in overlay at `_scratch_convert\\synth_sv\\workspace\\GakuranCharts\\` (JSON + wav). NO workspace collision (`*synth*` absent). NOT deployed — holding for user go-ahead per the April procedure.
+- Design (beat = 0.4 s, offset 0): baseline notes b4/8/12 (1.6/3.2/4.8 s) | STOP b16 (6.4 s) resume b20 (8.0 s), notes b15/18/21 (6.0/7.2 frozen/8.4 s) | REVERSE -1.0 b28 (11.2 s) resume b32 (12.8 s), notes b27/30/33 (10.8/12.0 backward/13.2 s; reverse displaces -1.6 scroll-s) | COMBINED 0@b40 (16.0 s), -0.5@b44 (17.6 s), 1@b48 (19.2 s), notes b39/42/46/49 (15.6/16.8 frozen/18.4 slow-backward/19.6 s; -0.5 leg displaces -0.8 scroll-s).
+- Converter output verified against design (13/13 beats, 8/8 scroll points verbatim). Self-correction on record: first draft misplaced 3 taps on transition boundaries (20/32/48 instead of 21/33/49); caught on output inspection (19.2 vs 19.6 s duration), fixed with one revert of a wrong-measure edit plus the two correct moves, re-verified 13/13.
+- NO converter/test code touched (verified path frozen, session 23). No new regression test: this is a gameplay fixture, not a code change.
+- Next: user deploys overlay + playtests Etterna vs Gakuran at the windows above; record expected-vs-observed before any code talk.
+
 ### Session 22 (2026-10-12): April Showers LIVE-VERIFIED by user ("same as same")
 - User playtested Etterna vs Gakuran: scroll-rate behavior matches. Rate-variation fidelity on a single-BPM `.ssc` chart is VERIFIED by user eyeball (final authority). Scope honesty preserved: this says nothing about stops/reverses — zero/negative scrolls still untested anywhere (no local chart has them; synthetic chart remains the next step if wanted).
 - No code changed this turn (docs only). No scores involved (user playtest, not a staged probe).
