@@ -12,7 +12,8 @@ Mapping notes:
     (same simplification as the osu! converter, so SV/BPM math stays consistent)
   * HitObjects: StartTime/Lane taps, EndTime holds; KeySounds ignored
   * SliderVelocities (StartTime ms + Multiplier) -> scrollChanges, consecutive
-    equal rates collapsed, clamped like the osu! converter
+    equal rates collapsed; rates kept verbatim (negatives, zero, extremes) and
+    beats stored with BEAT_DECIMALS so sub-0.03 ms spike pairs survive
   * TimingPoints[1:] -> animationBpmChanges
   * Keys4 needs no fold; 5K-7K convert 1:1 with a "lanes" field (loader 2.0.19+),
     8K+ fold to --max-lanes, mirroring the osu! converter's policy
@@ -36,6 +37,12 @@ from osu2gakuran import (FORMAT_VERSION, LANES, MAX_KEYBOARD_LANES, assign_ranks
                          fold_columns, place_media, sanitize_id, tier_for)
 
 LIST_SECTIONS = ("TimingPoints", "SliderVelocities", "HitObjects")
+
+# Decimals kept for beat positions (note b/d and SV b). 4 decimals is a 0.0308 ms
+# step at 195 BPM, which is WIDER than the 0.0156 ms (1/64 ms) teleport spikes some
+# Quaver SV maps use (e.g. +9856 / -9856 / 1.0 within 0.03 ms): rounding merged the
+# cancelling point away and left permanent scroll offsets. 10 decimals is ~3e-8 ms.
+BEAT_DECIMALS = 10
 
 
 def parse_qua(text: str):
@@ -115,14 +122,14 @@ def convert_file(qua_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
         if fold:
             raw.append((t, end, col))
         else:
-            notes.append({"b": round(t / ref_bl, 4), "l": col,
-                          "d": round((end - t) / ref_bl, 4) if end else 0})
+            notes.append({"b": round(t / ref_bl, BEAT_DECIMALS), "l": col,
+                          "d": round((end - t) / ref_bl, BEAT_DECIMALS) if end else 0})
     fold_note = ""
     if fold:
         placed, stats = fold_columns(raw, keys, lane_cap)
         for t, end, lane in placed:
-            notes.append({"b": round(t / ref_bl, 4), "l": lane,
-                          "d": round((end - t) / ref_bl, 4) if end is not None else 0})
+            notes.append({"b": round(t / ref_bl, BEAT_DECIMALS), "l": lane,
+                          "d": round((end - t) / ref_bl, BEAT_DECIMALS) if end is not None else 0})
         fold_note = f", folded {keys}K->{lane_cap} lanes"
         warnings.append(f"folded {keys}K -> {lane_cap} lanes: {stats['source']} objects, "
                         f"{stats['kept']} kept, {stats['rerouted']} rerouted, "
@@ -157,11 +164,10 @@ def convert_file(qua_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
             warnings.append(f"non-finite SV {mult} at {t_ms}ms skipped")
             continue
         r = round(mult, 4)
-        b = round(t_ms / ref_bl, 4)
+        b = round(t_ms / ref_bl, BEAT_DECIMALS)
         if scroll_changes and scroll_changes[-1]["b"] == b:
-            # Same grid instant: identical ms, or distinct ms values rounding
-            # to one beat (sub-0.03 ms apart — unrepresentable on our axis).
-            # Quaver plays the LAST one in file order, so it wins.
+            # Same instant on our axis: identical ms in the file (or values closer
+            # than ~1e-7 ms). Quaver plays the LAST one in file order, so it wins.
             scroll_changes[-1] = {"b": b, "rate": r}
         elif scroll_changes and abs(scroll_changes[-1]["rate"] - r) < 1e-9:
             continue  # consecutive equal rates: one boundary suffices

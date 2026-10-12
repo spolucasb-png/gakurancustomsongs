@@ -151,14 +151,17 @@ do not re-run blindly): `C:\Users\Administrator\_gk_patch\qua_sv_stats.py`
 - Test hygiene: my play wrote a 0-score row for ball_hard_sv_ballin; removed
   with `clearScores("ball_hard_sv_ballin")` (Scores.json had no other rows).
 - CHECKLIST for the precision fix (update after EVERY step, commit small):
-  - [ ] ROADMAP item 12 + this file updated BEFORE coding (user asked; done in
+  - [x] ROADMAP item 12 + this file updated BEFORE coding (user asked; done in
     the commit that adds this checklist).
-  - [ ] `tools/qua2gakuran.py`: BEAT_DECIMALS = 10 for note `b`/`d` (both the
+  - [x] `tools/qua2gakuran.py`: BEAT_DECIMALS = 10 for note `b`/`d` (both the
     plain and the folded path) and scrollChanges `b`; the same-grid collapse
     key follows. Rates stay at 4 decimals. osu/sm converters untouched.
-  - [ ] Offline test `tools/test_qua_precision.py`: the +9856/-9856/1.0 spike
+    (session 12: written by the previous session, uncommitted; reviewed, ref_bpm/rates/duration
+    roundings left as planned)
+  - [x] Offline test `tools/test_qua_precision.py`: the +9856/-9856/1.0 spike
     triple keeps 3 distinct points and zero net displacement; existing tests
-    (`test_fold.py`, `check.py`) still pass.
+    (`test_fold.py`, `check.py`) still pass. (session 12: 6/6 pass, integral vs raw source
+    < 1e-6 scroll-s incl. inside the spikes)
   - [ ] Back up the 4 Quaver chart JSONs (`ball_hard_sv_ballin`,
     `ball_hard_skrubble_s_ball`, `bozo_bozo_cope`, `halloween_day_spooked_sv`)
     to `_scratch_convert\workspace_charts_backup_before_precision`, convert
