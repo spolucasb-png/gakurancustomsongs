@@ -169,17 +169,51 @@ def test_json_roundtrip_keeps_precision():
     assert back["scrollChanges"] == chart["scrollChanges"]
 
 
+def _qua_with_initial(init, sv_points):
+    sv = "".join(f"- StartTime: {t}\n  Multiplier: {m}\n" for t, m in sv_points)
+    head, rest = QUA.split("SliderVelocities:\n")
+    head = head.replace("AudioFile: none.mp3\n",
+                        f"AudioFile: none.mp3\nInitialScrollVelocity: {init}\n", 1)
+    return head + "SliderVelocities:\n" + sv + "HitObjects:" + rest.split("HitObjects:")[1]
+
+
+# Fixtures for AUDIT item 14 HIGH 01 whose implementation is pending: the
+# converter currently ignores InitialScrollVelocity, so these are recorded
+# here and skipped until the fix lands (gates stay green meanwhile).
+PENDING_INITIAL_SV = "item 14 HIGH 01: InitialScrollVelocity not converted"
+
+
+def test_initial_scroll_velocity_without_later_sv():
+    sc = convert(_qua_with_initial(2.0, [])).get("scrollChanges", [])
+    assert [(c["b"], c["rate"]) for c in sc] == [(0, 2.0)], sc
+
+
+def test_initial_scroll_velocity_with_later_sv():
+    sc = convert(_qua_with_initial(0.5, [(6000.0, 2.0)]))["scrollChanges"]
+    assert (sc[0]["b"], sc[0]["rate"]) == (0, 0.5), sc
+    assert any(abs(c["b"] * REF_BL_MS - 6000.0) < 1e-6 and c["rate"] == 2.0 for c in sc), sc
+
+
 def main():
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
-    failed = 0
+    failed, skipped = 0, []
     for name, fn in tests:
+        if name in ("test_initial_scroll_velocity_without_later_sv",
+                    "test_initial_scroll_velocity_with_later_sv"):
+            skipped.append(f"{name} ({PENDING_INITIAL_SV})")
+            continue
         try:
             fn()
             print(f"ok    {name}")
         except Exception as exc:  # noqa: BLE001
             failed += 1
             print(f"FAIL  {name}: {type(exc).__name__}: {exc}")
-    print(f"{len(tests) - failed}/{len(tests)} passed")
+    for s in skipped:
+        print(f"skip  {s}")
+    # Skips are known-issue fixtures, reported separately — never folded into
+    # the pass count (audit item 14 HIGH 01: implementation pending, no fix here).
+    print(f"{len(tests) - failed - len(skipped)}/{len(tests)} passed, "
+          f"{len(skipped)} skipped (known-issue)")
     return 1 if failed else 0
 
 
