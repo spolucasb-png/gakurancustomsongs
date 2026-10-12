@@ -3,6 +3,7 @@
 ## Branch check (session 24, review-prompted): `main` == `origin/main` == `a1c24bc`, no ahead/behind, remote contains HEAD. The stale 831-line GitHub `main` view was cache — no pointer issue, no fix needed or made.
 
 ## Standing constraint (agreed session 23): the verified `.ssc` conversion path stays UNCHANGED until gameplay evidence shows a defect. New tests (synthetic stops/reverses, multi-BPM) observe first, change code only with a failing measurement in hand.
+- Session 26 addition: external hardcoding audit recorded as ROADMAP item 14 (RECORDED, not started). Same constraint covers it: tests-before-changes; high findings (Quaver InitialScrollVelocity, Etterna ref-BPM axis, ID collisions) wait for fixtures + measured evidence like everything else.
 
 ## READ FIRST: work-in-progress log + save protocol
 **Instruction to every AI session working in this repo: keep this section
