@@ -15,6 +15,14 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
+### Session 19 (2026-10-12): review findings 1-3 fixed (convert_song + per-chart timing + NOTES2)
+- Finding 1 CONFIRMED live in code (`results.append(list)` -> `assign_ranks` `c["songId"]` TypeError; only convert_song.py + CLI + tests call `sm.convert_file`). Fixed: `extend()` at both call sites, `.ssc` in recursive discovery + suffix match + help/docstring. End-to-end proven on the real April Showers folder (1 `.sm` + 1 `.ssc` -> 2 charts, ranks pass, no crash).
+- Finding 2 CONFIRMED deeper than reported: not only does the dict keep the LAST `#SCROLLS`, the "global fallback" itself was poisoned (block tags leak into parse_sm's file-wide dict — proven: all 3 synthetic charts inherited the stopped chart's `#STOPS`). Fixed: true header = text before first `#STEPSTYPE`; per-chart resolve (block tag present wins even if empty, else header) for BPMS/STOPS/SCROLLS/SPEEDS/OFFSET. Chart-local `#STOPS`/bad `#BPMS` now skips THAT chart, siblings still convert (old single-block outcome unchanged: no charts).
+- Zero local files have multi-block or per-chart timing (264 scanned: 0 multi, 0 NOTES2, 0 overrides) — so the new tests are synthetic by necessity (SSC2: 2 SV sets + SPEEDS on Hard + STOPS on Stopped + divergent global 9.0).
+- Finding 3 fixed: `#NOTES2?` in the block regex + test. No local files use it.
+- Gates: `test_sm_scrolls.py` 12/12 (was 6/6), qua 8/8, fold 10/10, check.py 18 files. Byte-stability re-proven after the restructure: 6/6 real `.sm` vs pre-ssc HEAD output identical, April `.ssc` identical to session-18 scratch.
+- KNOWN WART (not fixed, out of review scope): a folder holding parallel `.sm`+`.ssc` of one song yields the same chart_id from both — last writer wins on disk (observed: april_showers_medium.json written twice). Convert one file at a time until chart_ids disambiguate.
+
 ### Session 18 (2026-10-12): .ssc + #SCROLLS support in sm2gakuran.py (Etterna SV test path)
 - External report verified from the code: converter globbed `*.sm` only and never read `#SCROLLS`/`#SPEEDS`. Scanner (`Downloads\\find_stepmania_sv.py`, NOT copied into repo) run against the LOCAL pack: 264 files, 9 candidates, all `#SCROLLS`, zero `#SPEEDS`/zero-or-negative anywhere locally.
 - Implemented: `.ssc` discovery + new-style block parser (`#STEPSTYPE..#NOTES` per chart; parse_sm dict-overwrite keeps last tag so blocks re-scanned in file order), `#SCROLLS` -> `scrollChanges` (verbatim beats on notes' axis, same-beat last-in-file wins, rates verbatim incl. 0, rounded 4 like qua), `#SPEEDS` loud SKIPPED warning (non-fatal), `#STOPS` still refuses. `convert_file` now returns a LIST of charts (main/test updated).

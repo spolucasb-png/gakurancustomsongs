@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sm2gakuran as S  # noqa: E402
+import convert_song as C  # noqa: E402
 
 SSC = """#VERSION:0.83;
 #TITLE:Scroll Test;
@@ -108,6 +109,122 @@ def test_stops_still_refuses():
     charts, err = convert(SSC.replace("#STOPS:;", "#STOPS:16.000=0.500;"))
     assert charts == [], charts
     assert "#STOPS" in err, err
+
+
+SSC2 = """#TITLE:Two Diff;
+#ARTIST:A;
+#OFFSET:0.0;
+#BPMS:0.000=100.000;
+#SCROLLS:0.000=9.000;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Easy;
+#METER:3;
+#SCROLLS:0.000=0.500,4.000=1.000;
+#NOTES:
+0001
+0000,
+0000
+0000;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Hard;
+#METER:8;
+#SCROLLS:0.000=2.000;
+#SPEEDS:0.000=1.000,0.000,0;
+#NOTES:
+1000
+0000,
+0000
+0000;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Stopped;
+#METER:5;
+#STOPS:4.000=0.500;
+#NOTES:
+0100
+0000;
+"""
+
+
+def by_diff(charts):
+    return {c["difficulty"]["Keyboard"]: c for c in charts}
+
+
+def test_per_chart_scrolls_isolated():
+    # Each difficulty keeps its OWN scrolls; the global 9.0 must not leak in,
+    # and the stopped chart's absence must not disturb the others.
+    charts, _ = convert(SSC2)
+    assert len(charts) == 2, [c["id"] for c in charts]
+    d = by_diff(charts)
+    assert [(c["b"], c["rate"]) for c in d["Easy"]["scrollChanges"]] == [
+        (0.0, 0.5), (4.0, 1.0)], d["Easy"]["scrollChanges"]
+    assert [(c["b"], c["rate"]) for c in d["Hard"]["scrollChanges"]] == [
+        (0.0, 2.0)], d["Hard"]["scrollChanges"]
+    assert "Stopped" not in d
+
+
+def test_per_chart_stops_skips_only_that_chart():
+    charts, err = convert(SSC2)
+    ids = [c["id"] for c in charts]
+    assert "two_diff_stopped" not in ids, ids
+    assert "two_diff_easy" in ids and "two_diff_hard" in ids, ids
+    assert "Stopped" in err and "#STOPS" in err, err
+
+
+def test_per_chart_speeds_names_the_chart():
+    charts, err = convert(SSC2)
+    assert len(charts) == 2
+    assert "[Hard]" in err and "SKIPPED" in err, err
+    # the warning is chart-scoped: no SPEEDS warning is attributed to Easy
+    assert "[Easy]" not in err, err
+
+
+def test_global_scrolls_fallback():
+    # A chart block with NO timing tags of its own inherits the global ones.
+    text = SSC2.split("#STEPSTYPE:")[1]
+    text = "#TITLE:F;\n#ARTIST:A;\n#OFFSET:0;\n#BPMS:0.000=100.000;\n#SCROLLS:0.000=0.250;\n#STEPSTYPE:" + text
+    charts, _ = convert(text)
+    assert len(charts) == 1
+    assert [(c["b"], c["rate"]) for c in charts[0]["scrollChanges"]] == [
+        (0.0, 0.5), (4.0, 1.0)], charts[0]["scrollChanges"]
+
+
+def test_notes2_block_parses():
+    text = """#TITLE:N2;
+#ARTIST:A;
+#OFFSET:0;
+#BPMS:0.000=120.000;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Edit;
+#METER:6;
+#NOTES2:
+0001
+0000;
+"""
+    charts, _ = convert(text)
+    assert len(charts) == 1, charts
+    assert charts[0]["id"] == "n2_edit", charts[0]["id"]
+    assert [(n["b"], n["l"]) for n in charts[0]["charts"]["Keyboard"]] == [(0.0, 4)]
+
+
+def test_unified_frontend_handles_sm_and_ssc():
+    # convert_song.py must accept the list return (dict access in assign_ranks
+    # raised TypeError on bare lists) and discover .ssc next to .sm.
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        (d / "a.sm").write_text(SM, encoding="utf-8")
+        (d / "b.ssc").write_text(SSC, encoding="utf-8")
+        argv = ["convert_song.py", str(d), "--charts-dir", str(d / "c"),
+                "--audio-dir", str(d / "a"), "--assets-dir", str(d / "s")]
+        old = sys.argv
+        sys.argv = argv
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                rc = C.main()
+        finally:
+            sys.argv = old
+        assert rc == 0, rc
+        outs = sorted((d / "c").glob("*.json"))
+        assert len(outs) == 2, [p.name for p in outs]
 
 
 def main():

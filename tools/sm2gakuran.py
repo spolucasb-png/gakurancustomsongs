@@ -16,8 +16,10 @@ Mapping notes:
   * a non-empty #SPEEDS warns LOUDLY and converts WITHOUT it (the engine
     cannot do speed ramps); a non-empty #STOPS refuses the chart: the engine
     cannot freeze time and a silent desync is worse than a skip
-  * .ssc files use one #STEPSTYPE..#NOTES block per chart (each becomes its
-    own JSON); old-style .sm files keep the single colon-joined #NOTES block
+  * .ssc files use one #STEPSTYPE..#NOTES (or #NOTES2, keysounds) block per
+    chart (each becomes its own JSON); a chart block may override
+    BPMS/STOPS/SCROLLS/SPEEDS/OFFSET for itself, else the global header
+    applies; old-style .sm files keep the single colon-joined #NOTES block
   * dance-single is 4 columns, so no fold path (other stepstypes are skipped)
 
 Usage:
@@ -100,7 +102,7 @@ def parse_chart_blocks(text: str, tags: dict):
     LAST repeated tag, so new-style blocks are re-scanned here in file order.
     """
     blocks = []
-    for m in re.finditer(r"#STEPSTYPE:(.*?);(.*?)#NOTES:(.*?);", text, re.DOTALL):
+    for m in re.finditer(r"#STEPSTYPE:(.*?);(.*?)#NOTES2?:(.*?);", text, re.DOTALL):
         stepstype = m.group(1).strip()
         middle, notes_text = m.group(2), m.group(3)
 
@@ -108,17 +110,53 @@ def parse_chart_blocks(text: str, tags: dict):
             mm = re.search(r"#" + tag + r":(.*?);", middle, re.DOTALL)
             return mm.group(1).strip() if mm else ""
 
-        blocks.append((stepstype, one("DESCRIPTION") or "Unknown",
-                       one("DIFFICULTY") or "Normal", one("METER"), notes_text))
+        timing = {}
+        for tm in re.finditer(r"#(BPMS|STOPS|SCROLLS|SPEEDS|OFFSET):(.*?);",
+                              middle, re.DOTALL):
+            timing[tm.group(1)] = tm.group(2).strip()
+        blocks.append({"stepstype": stepstype,
+                       "author": one("DESCRIPTION") or "Unknown",
+                       "difficulty": one("DIFFICULTY") or "Normal",
+                       "meter": one("METER"),
+                       "measures": notes_text,
+                       "timing": timing})
     if blocks:
         return blocks
     if tags.get("NOTES"):
         fields = [f.strip() for f in tags["NOTES"].split(":", 5)]
         while len(fields) < 6:
             fields.append("")
-        return [(fields[0], fields[1] or "Unknown", fields[2] or "Normal",
-                 fields[3], fields[5])]
+        return [{"stepstype": fields[0], "author": fields[1] or "Unknown",
+                 "difficulty": fields[2] or "Normal", "meter": fields[3],
+                 "measures": fields[5], "timing": {}}]
     return []
+
+
+def resolve_timing(block: dict, tags: dict, name: str) -> str:
+    """Chart-block timing value when the tag is PRESENT in the block (even
+    empty, which explicitly clears the global); otherwise the global header
+    value. StepMania .ssc lets charts override BPMS/STOPS/SCROLLS/SPEEDS/
+    OFFSET per difficulty.
+    """
+    if name in block["timing"]:
+        return block["timing"][name]
+    return tags.get(name, "")
+
+
+def build_scroll_changes(raw: str, warnings: list):
+    """#SCROLLS beat=ratio text -> scrollChanges list.
+
+    Beats are the file's musical beats (same axis as the notes); same beat
+    twice collapses to the LAST file entry (Quaver semantics); rates go in
+    VERBATIM (the loader integral handles zero/negatives, session 16).
+    """
+    won = {}
+    for b, r in parse_scrolls(raw):
+        if r != r or abs(r) == float("inf"):
+            warnings.append(f"non-finite #SCROLLS rate {r} at beat {b} (dropped)")
+            continue
+        won[b] = round(r, 4)
+    return [{"b": b, "rate": won[b]} for b in sorted(won)]
 
 
 def parse_measures(measures_text: str):
@@ -175,60 +213,30 @@ def parse_measures(measures_text: str):
 
 def convert_file(sm_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path,
                  source="etterna"):
-    """Convert one .sm/.ssc file -> list of charts (one per dance-single block)."""
+    """Convert one .sm/.ssc file -> list of charts (one per dance-single block).
+
+    Timing (BPMS/STOPS/SCROLLS/SPEEDS/OFFSET) resolves per chart: a tag
+    present inside the chart's block wins, else the global header (StepMania
+    .ssc override semantics). Files without overrides behave exactly as before.
+    """
     text = sm_path.read_text(encoding="utf-8", errors="replace")
     tags = parse_sm(text)
     title = tags.get("TITLE", "Unknown").strip() or "Unknown"
     artist = tags.get("ARTIST", "Unknown").strip() or "Unknown"
 
-    segs = parse_bpms(tags.get("BPMS", ""))
-    if not segs:
-        print(f"  - skipped '{sm_path.name}': no valid #BPMS", file=sys.stderr)
-        return []
-    if tags.get("STOPS", "").strip():
-        print(f"  - skipped '{sm_path.name}': #STOPS need a time freeze the engine "
-              f"cannot do (would desync)", file=sys.stderr)
-        return []
-    ref_bpm = round(segs[0][1], 4)
+    # The TRUE global header is the text BEFORE the first chart block:
+    # parse_sm's dict keeps the LAST repeated tag file-wide, so a per-chart
+    # #SCROLLS/#STOPS later in the file would otherwise poison the fallback
+    # every chart without its own override inherits.
+    first_block = re.search(r"#STEPSTYPE:", text)
+    header_tags = parse_sm(text[:first_block.start()] if first_block else text)
 
     warnings = []
-    speeds_raw = tags.get("SPEEDS", "").strip()
-    if speeds_raw:
-        n_speeds = len([p for p in speeds_raw.split(",") if p.strip()])
-        warnings.append(f"#SPEEDS has {n_speeds} entrie(s): SKIPPED - the engine "
-                        f"cannot do speed ramps, so this chart converts WITHOUT "
-                        f"them (sections under #SPEEDS scroll at the #SCROLLS rate "
-                        f"and may look wrong)")
 
-    # #SCROLLS beat=ratio -> scrollChanges. Beats are the file's musical beats,
-    # the same axis the notes below are stored on (exact for single-BPM files;
-    # multi-BPM files share the notes' existing ref-BPM approximation). Same
-    # beat twice collapses to the LAST file entry (Quaver semantics); rates go
-    # in VERBATIM (the loader integral handles zero/negatives, session 16).
-    scroll_changes = []
-    won = {}
-    for b, r in parse_scrolls(tags.get("SCROLLS", "")):
-        if r != r or abs(r) == float("inf"):
-            warnings.append(f"non-finite #SCROLLS rate {r} at beat {b} (dropped)")
-            continue
-        won[b] = round(r, 4)
-    for b in sorted(won):
-        scroll_changes.append({"b": b, "rate": won[b]})
-
-    blocks = parse_chart_blocks(text, tags)
+    blocks = parse_chart_blocks(text, header_tags)
     if not blocks:
         print(f"  - skipped '{sm_path.name}': no #NOTES block", file=sys.stderr)
         return []
-
-    try:
-        offset_ms = round(float(tags.get("OFFSET", "0") or 0) * 1000)
-    except ValueError:
-        offset_ms = 0
-
-    anim_changes = [
-        {"t": round(beat_to_ms(b, segs) / 1000.0, 3), "bpm": round(bpm, 2)}
-        for b, bpm in segs[1:]
-    ]
 
     id_stem = title
     if not re.search(r"[a-zA-Z0-9]", title):
@@ -236,22 +244,33 @@ def convert_file(sm_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path,
     song_id = sanitize_id(id_stem)
 
     # Validate every dance-single block BEFORE writing anything (one bad block
-    # aborts the file, as before).
-    parsed = []
-    for stepstype, author, difficulty, meter, measures_text in blocks:
+    # aborts the file, as before). A chart carrying its own #STOPS (or no
+    # valid #BPMS) is SKIPPED, not fatal: sibling charts still convert.
+    validated = []
+    for block in blocks:
+        stepstype, difficulty = block["stepstype"], block["difficulty"]
         if stepstype != "dance-single":
             print(f"  - skipped '{difficulty}': stepstype {stepstype} is not dance-single",
                   file=sys.stderr)
             continue
-        notes, nwarnings, fatal = parse_measures(measures_text)
+        segs = parse_bpms(resolve_timing(block, header_tags, "BPMS"))
+        if not segs:
+            print(f"  - skipped '{difficulty}' in '{sm_path.name}': no valid #BPMS",
+                  file=sys.stderr)
+            continue
+        if resolve_timing(block, header_tags, "STOPS").strip():
+            print(f"  - skipped '{difficulty}' in '{sm_path.name}': #STOPS need a time freeze "
+                  f"the engine cannot do (would desync)", file=sys.stderr)
+            continue
+        notes, nwarnings, fatal = parse_measures(block["measures"])
         if fatal is not None:
             print(f"  ! ERROR: {fatal}", file=sys.stderr)
             return []
         if not notes:
             print(f"  ! ERROR: no convertible notes in '{difficulty}'", file=sys.stderr)
             return []
-        parsed.append((author, difficulty, meter, notes, nwarnings))
-    if not parsed:
+        validated.append((block, segs, notes, nwarnings))
+    if not validated:
         return []
 
     music = tags.get("MUSIC", "").strip()
@@ -269,7 +288,26 @@ def convert_file(sm_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path,
     out_dir.mkdir(parents=True, exist_ok=True)
     charts = []
     used_ids = set()
-    for author, difficulty, meter, notes, nwarnings in parsed:
+    for block, segs, notes, nwarnings in validated:
+        difficulty, author, meter = block["difficulty"], block["author"], block["meter"]
+        ref_bpm = round(segs[0][1], 4)
+        try:
+            offset_ms = round(float(resolve_timing(block, header_tags, "OFFSET") or 0) * 1000)
+        except ValueError:
+            offset_ms = 0
+        speeds_raw = resolve_timing(block, header_tags, "SPEEDS").strip()
+        if speeds_raw:
+            n_speeds = len([p for p in speeds_raw.split(",") if p.strip()])
+            warnings.append(f"[{difficulty}] #SPEEDS has {n_speeds} entrie(s): SKIPPED - the engine "
+                            f"cannot do speed ramps, so this chart converts WITHOUT "
+                            f"them (sections under #SPEEDS scroll at the #SCROLLS rate "
+                            f"and may look wrong)")
+        scroll_changes = build_scroll_changes(resolve_timing(block, header_tags, "SCROLLS"),
+                                              warnings)
+        anim_changes = [
+            {"t": round(beat_to_ms(b, segs) / 1000.0, 3), "bpm": round(bpm, 2)}
+            for b, bpm in segs[1:]
+        ]
         chart_id = sanitize_id(f"{id_stem}_{difficulty}")
         if chart_id in used_ids:
             i = 2

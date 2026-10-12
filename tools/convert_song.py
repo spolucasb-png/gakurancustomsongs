@@ -5,9 +5,9 @@ Auto-detects the input by extension and calls the tested per-format
 converters (osu2gakuran / sm2gakuran / qua2gakuran live on as importable
 building blocks and standalone CLIs); shared output dirs, one rank pass.
 
-Inputs: .osz / .osu (osu!), .sm (StepMania/Etterna dance-single),
+Inputs: .osz / .osu (osu!), .sm / .ssc (StepMania/Etterna dance-single),
         .qp / .qua (Quaver Keys), or a directory (every supported file inside,
-        .sm/.qua searched recursively, .osz/.osu top-level like before).
+        .sm/.ssc/.qua searched recursively, .osz/.osu top-level like before).
 
 Usage:
     python tools/convert_song.py <file-or-dir> --charts-dir C --audio-dir A --assets-dir S
@@ -52,7 +52,7 @@ def convert_osu_path(osu_path, charts, audio, assets, args):
 
 def main():
     ap = argparse.ArgumentParser(description="Convert rhythm-game maps (osu!/sm/qua) to GakuranCharts JSON")
-    ap.add_argument("input", type=Path, nargs="+", help=".osz/.osu/.sm/.qp/.qua files or directories")
+    ap.add_argument("input", type=Path, nargs="+", help=".osz/.osu/.sm/.ssc/.qp/.qua files or directories")
     ap.add_argument("--charts-dir", type=Path, required=True)
     ap.add_argument("--audio-dir", type=Path, required=True)
     ap.add_argument("--assets-dir", type=Path, required=True)
@@ -72,11 +72,10 @@ def main():
             for o in sorted(inp.glob("*.osz")) + sorted(inp.glob("*.osu")):
                 results += convert_osu_path(o, args.charts_dir, args.audio_dir,
                                             args.assets_dir, args)
-            for s in sorted(inp.rglob("*.sm")):
-                c = sm.convert_file(s, args.charts_dir, args.audio_dir, args.assets_dir,
-                                    source=args.source or SONG_DEFAULT_SOURCE["sm"])
-                if c:
-                    results.append(c)
+            for s in sorted(inp.rglob("*.sm")) + sorted(inp.rglob("*.ssc")):
+                results.extend(sm.convert_file(s, args.charts_dir, args.audio_dir,
+                                               args.assets_dir,
+                                               source=args.source or SONG_DEFAULT_SOURCE["sm"]))
             for q in sorted(inp.rglob("*.qp")):
                 results += qua.convert_qp(
                     q, args.charts_dir, args.audio_dir, args.assets_dir,
@@ -93,11 +92,10 @@ def main():
         if suf in (".osz", ".osu"):
             results += convert_osu_path(inp, args.charts_dir, args.audio_dir,
                                         args.assets_dir, args)
-        elif suf == ".sm":
-            c = sm.convert_file(inp, args.charts_dir, args.audio_dir, args.assets_dir,
-                                source=args.source or SONG_DEFAULT_SOURCE["sm"])
-            if c:
-                results.append(c)
+        elif suf in (".sm", ".ssc"):
+            results.extend(sm.convert_file(inp, args.charts_dir, args.audio_dir,
+                                           args.assets_dir,
+                                           source=args.source or SONG_DEFAULT_SOURCE["sm"]))
         elif suf == ".qp":
             results += qua.convert_qp(
                 inp, args.charts_dir, args.audio_dir, args.assets_dir,
