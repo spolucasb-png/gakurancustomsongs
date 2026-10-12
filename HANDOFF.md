@@ -21,6 +21,28 @@ User's words: "the notes dont render properly on pauses sections, it just spawns
 - Likely suspects (all unchecked): (1) the SV-spawn pass (`persistentFrame`, RenderStepped) only spawns/positions notes inside a look-ahead window, and a pause with big SV or a long time gap leaves the next note outside it; (2) the engine's own look-ahead/pooling by time rather than by scroll distance; (3) negative/zero SV segments (loader v2.0.30 keeps them verbatim) hiding notes in a gap; (4) it may be tied to the new 10-decimal beats / same-instant SV collapse (commits `1d80343`, `947f50f`) on `ball_hard_sv_ballin`, or it may happen on every chart - find out which first.
 - How to start: (a) ask which chart(s) and whether it also happens on an osu! chart with no SV; (b) take a chart with a long gap, play it live and sample, per frame, the count of note sprites alive and the Y of the next unspawned note (extend `C:\Users\Administrator\_gk_patch\sv_live_sampler.luau`, scratch, not in repo); (c) compare with the engine's spawn window in RhythmEngine/RhythmNoteSprites (decompile with Madium `decompile_script`); (d) only then touch the loader. Do not bump the version until a fix is live-tested.
 - Status: nothing investigated, no code changed for this.
+- INVESTIGATED same day, live on client 13984 (ball_hard, deployed v2.0.30):
+  VERDICT faultless-rendering — no loader defect found, no code changed.
+  Every in-window note HAS an instance in all samples (win==inst: 14/14,
+  15/15, ...), cursor advances at chart density, spawnCapped=0,
+  spawnOrderFix=0, errors=0: the spawn path (suspects 1+2) is healthy.
+  What the player sees is the map's authored gimmicks, reproduced exactly:
+  uncompensated ±4.4M teleport spikes (e.g. −69 scroll-sec at 20.403s, +69 at
+  20.480s) fling the playfield ±132,000px for tens of ms, and 20s/15s/12s
+  negative runs scroll notes away until the rate flips. The loader's integral
+  matches a from-source Quaver-semantics reference to measurement precision,
+  and calm-zone positions were already proven ≤1px in session 13.
+  Suspect-by-suspect: (1) spawn pass healthy (above); (2) engine window
+  normal (win==inst every sample); (3) negative/zero SV behave as authored —
+  the screen emptying during reverses IS the effect; (4) 10-decimal beats
+  ruled OUT (file strictly increasing, 0 duplicate beats, calm exact; the
+  ±69 displacements each have a spike source in the raw .qua).
+  Upscroll=false confirmed live (sign convention verified, not assumed).
+  Recommendation: close as faithful-by-design; compare against real Quaver
+  playback if doubt remains. Optional, NOT built: a display-displacement
+  clamp so teleports bunch at the screen edge instead of flying — that would
+  break fidelity, so only on explicit request. Scores cleared after every
+  test play (0 rows), PlayingInstrument restored to nil.
 
 ### Current task (session 10): quaver SV mismatch on "ball hard" - FIXED + VERIFIED LIVE in session 13 (only the user's eyeball vs real Quaver is pending; see the checklist at the end of this section)
 Goal: the SV map `ball_hard_sv_ballin` does not move like the original game.
