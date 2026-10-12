@@ -447,6 +447,10 @@ The plan is now the parent-row + wheel difficulty submenu design in "Current foc
 - [ ] Playlist / queue / shuffle.
 - [ ] Practice mode: start from a timestamp, loop a section, no-fail. Speed rate depends on how the engine reads the audio clock, so check that first.
 
+### 13. Notes do not render during pause sections (user report 2026-10-11) - OPEN, unverified
+- [ ] User: notes don't render properly in pause/gap sections and only spawn once the gap is over ("i think", so unsure). Find out whether it is the loader's SV-spawn pass, the engine's spawn window, negative/zero SV, or a regression from the 10-decimal beats; reproduce on a chart with a long gap and sample sprites alive vs next-note Y. Details and plan in HANDOFF.md ("NEXT TASK (session 13)").
+- [ ] Parked: single-difficulty star badge for custom songs (redo on current `GakuranChart.lua`; `GakuranChart_v2.0.10.lua` is a stale untracked draft, do not reuse blindly).
+
 ### Bigger projects
 - [ ] More converters: Clone Hero `.chart`/`.mid`, StepMania `.sm`/`.ssc`, Quaver `.qua`.
 - [ ] Watch-folder importer: a Python script that auto-converts new `.osz` files (keep unzipping outside the executor).

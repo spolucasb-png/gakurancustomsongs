@@ -15,6 +15,13 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
+### NEXT TASK (session 13, user report 2026-10-11 21:33): notes do not render during pause/gap sections - HYPOTHESIS, NOT VERIFIED
+User's words: "the notes dont render properly on pauses sections, it just spawns when the pauses are gone.. i think". The user is unsure, so treat this as a lead, not a finding.
+- Symptom: during a long silent gap in a chart (no notes for a while), upcoming notes are not on screen; they only appear (spawn) once the gap is over, instead of scrolling in from the top.
+- Likely suspects (all unchecked): (1) the SV-spawn pass (`persistentFrame`, RenderStepped) only spawns/positions notes inside a look-ahead window, and a pause with big SV or a long time gap leaves the next note outside it; (2) the engine's own look-ahead/pooling by time rather than by scroll distance; (3) negative/zero SV segments (loader v2.0.30 keeps them verbatim) hiding notes in a gap; (4) it may be tied to the new 10-decimal beats / same-instant SV collapse (commits `1d80343`, `947f50f`) on `ball_hard_sv_ballin`, or it may happen on every chart - find out which first.
+- How to start: (a) ask which chart(s) and whether it also happens on an osu! chart with no SV; (b) take a chart with a long gap, play it live and sample, per frame, the count of note sprites alive and the Y of the next unspawned note (extend `C:\Users\Administrator\_gk_patch\sv_live_sampler.luau`, scratch, not in repo); (c) compare with the engine's spawn window in RhythmEngine/RhythmNoteSprites (decompile with Madium `decompile_script`); (d) only then touch the loader. Do not bump the version until a fix is live-tested.
+- Status: nothing investigated, no code changed for this.
+
 ### Current task (session 10): quaver SV mismatch on "ball hard" - FIXED + VERIFIED LIVE in session 13 (only the user's eyeball vs real Quaver is pending; see the checklist at the end of this section)
 Goal: the SV map `ball_hard_sv_ballin` does not move like the original game.
 Status (session 13): this paragraph is the ORIGINAL session-10 status and is
