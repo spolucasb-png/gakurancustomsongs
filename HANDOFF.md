@@ -15,6 +15,13 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
+### Session 20 (2026-10-12): review verdict on 7abc34b = PASS for controlled testing (docs only)
+- Reviewer confirms all 3 prior findings fixed (unified frontend, per-chart timing, NOTES2); did not execute the suite locally. Verdict: ready for a controlled single-BPM test, not proof of full SSC fidelity.
+- Concern 1 (NOTEDATA timing before STEPSTYPE) checked against all 9 local `.ssc`: every file has exactly one EMPTY `#NOTEDATA:;` + one `#STEPSTYPE`; all timing lives in the true global header; zero files place timing between NOTEDATA and STEPSTYPE. Tracked as future hardening ("eventually parse NOTEDATA sections as chart boundaries"), NOT implemented — reviewer said "eventually", verdict is pass, no local trigger.
+- Concern 2 (multi-BPM) + candidate status: single-BPM local SV candidates are April Showers (1 seg), crystallized (1), GO 4 IT (1); the other six are multi-BPM (up to 91 segs). Zero/negative scrolls exist NOWHERE locally (reconfirmed) — the reviewer's ideal "single-BPM with obvious stops" is unavailable without the 1.3 GB megapack or a synthetic chart. April's 0.2<->3.0 wobble remains the strongest available signal: rate-variation fidelity only.
+- Deployment hazard (chart_id collision) already recorded session 19; still open, still out of scope.
+- No code changed this turn. Next (needs user): deploy April Showers to workspace for the controlled live test vs Etterna, or pick crystallized/GO 4 IT instead.
+
 ### Session 19 (2026-10-12): review findings 1-3 fixed (convert_song + per-chart timing + NOTES2)
 - Finding 1 CONFIRMED live in code (`results.append(list)` -> `assign_ranks` `c["songId"]` TypeError; only convert_song.py + CLI + tests call `sm.convert_file`). Fixed: `extend()` at both call sites, `.ssc` in recursive discovery + suffix match + help/docstring. End-to-end proven on the real April Showers folder (1 `.sm` + 1 `.ssc` -> 2 charts, ranks pass, no crash).
 - Finding 2 CONFIRMED deeper than reported: not only does the dict keep the LAST `#SCROLLS`, the "global fallback" itself was poisoned (block tags leak into parse_sm's file-wide dict — proven: all 3 synthetic charts inherited the stopped chart's `#STOPS`). Fixed: true header = text before first `#STEPSTYPE`; per-chart resolve (block tag present wins even if empty, else header) for BPMS/STOPS/SCROLLS/SPEEDS/OFFSET. Chart-local `#STOPS`/bad `#BPMS` now skips THAT chart, siblings still convert (old single-block outcome unchanged: no charts).
