@@ -19,6 +19,12 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
+### Session 25 (2026-10-12): 3 more Etterna SV maps added (user request, deployed)
+- Picks (explicit `.ssc` paths, unified frontend, scratch-first): crystallized (2071 notes, 174 BPM, 12 SV: 0.75→1.0 ramp, 1 BPM seg), GO 4 IT (4481 notes, 172 BPM, 10 SV: 1.0→0.1 staircase, 1 seg), Chesire,s dance (2382 notes, 120 BPM, 4 SV: 10x spike + 0.3 dip, 7 BPM segs — MULTI-BPM caveat applies, flagged not blocking).
+- Source OFFSETs passed through verbatim (not a defect): crystallized -3487 ms, go4it +954 ms, chesire +1776 ms. If any chart feels globally off-sync in playtest, OFFSET is the named suspect — it's pack data, converter doesn't touch it.
+- No STOPS/SPEEDS in any of the three (no skips/warnings). Audio wired on all three. No workspace collisions; deployed additively (3 JSON + media). No converter/loader code touched (freeze holds).
+- Awaiting user eyeball vs Etterna whenever ready.
+
 ### Session 24 (2026-10-12): synthetic stop/reverse chart BUILT (scratch-only, not deployed)
 - `_scratch_convert\\synth_sv\\`: `synth_sv_test.ssc` (single 150 BPM, 13 taps, 8 `#SCROLLS`) + generated 25 s `silent.wav` (stdlib wave, so Etterna can time it) + unified-frontend output + staged drop-in overlay at `_scratch_convert\\synth_sv\\workspace\\GakuranCharts\\` (JSON + wav). NO workspace collision (`*synth*` absent). NOT deployed — holding for user go-ahead per the April procedure.
 - Design (beat = 0.4 s, offset 0): baseline notes b4/8/12 (1.6/3.2/4.8 s) | STOP b16 (6.4 s) resume b20 (8.0 s), notes b15/18/21 (6.0/7.2 frozen/8.4 s) | REVERSE -1.0 b28 (11.2 s) resume b32 (12.8 s), notes b27/30/33 (10.8/12.0 backward/13.2 s; reverse displaces -1.6 scroll-s) | COMBINED 0@b40 (16.0 s), -0.5@b44 (17.6 s), 1@b48 (19.2 s), notes b39/42/46/49 (15.6/16.8 frozen/18.4 slow-backward/19.6 s; -0.5 leg displaces -0.8 scroll-s).
