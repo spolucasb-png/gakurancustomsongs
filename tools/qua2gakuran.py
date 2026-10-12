@@ -169,6 +169,10 @@ def convert_file(qua_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
             # Same instant on our axis: identical ms in the file (or values closer
             # than ~1e-7 ms). Quaver plays the LAST one in file order, so it wins.
             scroll_changes[-1] = {"b": b, "rate": r}
+            # The winner may now equal the point before it (e.g. 1.0, [spike, 1.0]
+            # at one instant): the boundary is redundant, one is enough.
+            if len(scroll_changes) > 1 and abs(scroll_changes[-2]["rate"] - r) < 1e-9:
+                scroll_changes.pop()
         elif scroll_changes and abs(scroll_changes[-1]["rate"] - r) < 1e-9:
             continue  # consecutive equal rates: one boundary suffices
         else:

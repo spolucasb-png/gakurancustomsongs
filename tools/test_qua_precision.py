@@ -130,6 +130,25 @@ def test_note_and_hold_times_are_precise():
     assert by_lane[3]["d"] == 0
 
 
+def _qua_with_sv(points):
+    sv = "".join(f"- StartTime: {t}\n  Multiplier: {m}\n" for t, m in points)
+    head, rest = QUA.split("SliderVelocities:\n")
+    return head + "SliderVelocities:\n" + sv + "HitObjects:" + rest.split("HitObjects:")[1]
+
+
+def test_same_instant_winner_equal_to_predecessor_is_collapsed():
+    # 2.0 at 1000, then at 2000: 5.0 followed by 2.0 (last in file wins) -> the 2000
+    # point equals its predecessor and is redundant (one boundary suffices).
+    sc = convert(_qua_with_sv([(1000, 2.0), (2000, 5.0), (2000, 2.0)]))["scrollChanges"]
+    assert [c["rate"] for c in sc] == [2.0], sc
+    # a THIRD point at the same instant must still win over the popped pair
+    sc = convert(_qua_with_sv([(1000, 2.0), (2000, 5.0), (2000, 2.0), (2000, 7.0)]))["scrollChanges"]
+    assert [c["rate"] for c in sc] == [2.0, 7.0], sc
+    # and the generic invariant: no two consecutive equal rates anywhere
+    sc = convert(_qua_with_sv([(1000, 1.5), (1500, 1.5), (2000, 3.0), (2000, 1.5), (2500, 1.5), (3000, 0.0)]))["scrollChanges"]
+    assert all(abs(sc[i]["rate"] - sc[i + 1]["rate"]) > 1e-9 for i in range(len(sc) - 1)), sc
+
+
 def test_json_roundtrip_keeps_precision():
     chart = convert(QUA)
     back = json.loads(json.dumps(chart, separators=(",", ":")))
