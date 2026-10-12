@@ -396,15 +396,33 @@ def write_chart_json(out_dir: Path, chart_id: str, chart: dict) -> bool:
     text = json.dumps(chart, ensure_ascii=False, separators=(",", ":"))
     out_dir.mkdir(parents=True, exist_ok=True)
     dest = out_dir / f"{chart_id}.json"
+    if batch_aborted():
+        return False  # an earlier refusal killed the batch: write nothing more
     if dest.exists():
         try:
-            same = dest.read_text(encoding="utf-8") == text
+            existing = dest.read_text(encoding="utf-8")
         except OSError:
-            same = False
-        if not same:
-            WRITE_REFUSALS.append((chart_id, str(dest)))
-            rollback_batch()
-        return same
+            existing = None
+        if existing == text:
+            return True
+        # `rank` is assigned AFTER conversion (assign_ranks rewrites the file),
+        # so a rerun constructs rank=1 where the saved file has rank=2: that
+        # alone must not read as a collision. Normalized-equal keeps the saved
+        # (ranked) file and returns True; assign_ranks recomputes ranks anyway.
+        # Any other byte difference is still a refusal.
+        try:
+            same_shape = (
+                existing is not None
+                and {k: v for k, v in json.loads(existing).items() if k != "rank"}
+                == {k: v for k, v in chart.items() if k != "rank"}
+            )
+        except ValueError:
+            same_shape = False
+        if same_shape:
+            return True
+        WRITE_REFUSALS.append((chart_id, str(dest)))
+        rollback_batch()
+        return False
     dest.write_text(text, encoding="utf-8")
     WRITTEN_CHARTS.append(dest)
     return True
@@ -419,6 +437,7 @@ def write_chart_json(out_dir: Path, chart_id: str, chart: dict) -> bool:
 WRITTEN_CHARTS = []   # chart JSONs this process created (never pre-existing)
 CREATED_MEDIA = []    # media files this process created (reused ones unlisted)
 WRITE_REFUSALS = []   # (chart_id, dest-string) pairs refused for differing bytes
+ROLLBACK_ERRORS = []  # (path-string, error) deletions that failed during rollback
 
 
 def begin_batch():
@@ -426,11 +445,22 @@ def begin_batch():
 
     Every CLI main and convert_song.main calls this first: one process runs
     one batch, so leftovers from direct convert_file calls (tests) must not
-    leak into the run's abort decision.
+    leak into the run's abort decision. Direct library users delimit their
+    own batches the same way: calls between two begin_batch() calls share
+    one batch (a refusal rolls back all of it); calls after a fresh
+    begin_batch() start clean.
     """
     WRITTEN_CHARTS.clear()
     CREATED_MEDIA.clear()
     WRITE_REFUSALS.clear()
+    ROLLBACK_ERRORS.clear()
+
+
+def batch_aborted() -> bool:
+    """True once any chart-id refusal killed the batch: no further chart or
+    media writes may happen (converters bail out at their entry points and
+    archive loops break). The abort summary prints at batch end."""
+    return bool(WRITE_REFUSALS)
 
 
 def rollback_batch():
@@ -444,8 +474,12 @@ def rollback_batch():
         for p in paths:
             try:
                 Path(p).unlink()
-            except OSError:
-                pass
+            except OSError as e:
+                # A failed deletion must not masquerade as a clean restore:
+                # record it and say so loudly; the batch still aborts.
+                ROLLBACK_ERRORS.append((str(p), str(e)))
+                print(f"  ! WARNING: rollback could not delete '{p}': {e}",
+                      file=sys.stderr)
         paths.clear()
 
 
@@ -453,6 +487,8 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
                  copy_audio=True, mode_override=None,
                  include_nonmania=False, allow_lossy_keys=False, fold_keys=True,
                  max_lanes=MAX_KEYBOARD_LANES, source="osu"):
+    if batch_aborted():
+        return None  # an earlier refusal killed the batch: convert nothing more
     text = osu_path.read_text(encoding="utf-8", errors="replace")
     sections = parse_osu(text)
 

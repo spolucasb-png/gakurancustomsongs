@@ -6,6 +6,7 @@ from tempfile.TemporaryDirectory at the call sites (never inside the output
 tree), members are validated before any byte is written, and cleanup rides
 the context manager even when conversion raises.
 """
+import os
 import shutil
 import sys
 import tempfile
@@ -27,10 +28,14 @@ def safe_extract(zf: zipfile.ZipFile, dest: Path) -> int:
         name = info.filename.replace("\\", "/")
         if not name or name.endswith("/"):
             continue
-        if name in seen:
-            raise ValueError(f"duplicate archive member: {info.filename!r}")
-        seen.add(name)
         target = (dest / name).resolve()
+        # Duplicates are detected on the canonical staged target (resolved +
+        # OS-normalized), not the raw member name: "a.osu" vs "./a.osu" (and
+        # case variants on Windows) would otherwise overwrite each other.
+        key = os.path.normcase(str(target))
+        if key in seen:
+            raise ValueError(f"duplicate archive member for staged path: {info.filename!r}")
+        seen.add(key)
         try:
             target.relative_to(dest)
         except ValueError:
@@ -74,10 +79,17 @@ def convert_archive(arch_path: Path, kind: str, suffix: str, convert_fn,
             tmp = Path(tmp)
             try:
                 safe_extract(zf, tmp)
-            except ValueError as e:
+            except (ValueError, zipfile.BadZipFile, EOFError) as e:
+                # ValueError: hostile/duplicate members; BadZipFile: CRC or
+                # structural corruption found while reading a member; EOFError:
+                # truncated member data. Deliberately narrow: anything else is
+                # a programming error and must surface, not skip silently.
                 print(f"  - skipped '{arch_path.name}': {e}", file=sys.stderr)
                 return out
             for member in sorted(tmp.glob(f"*{suffix}")):
+                from osu2gakuran import WRITE_REFUSALS  # deferred: no load-time cycle
+                if WRITE_REFUSALS:
+                    break  # batch refused: stop before further members write
                 c = convert_fn(member, charts_dir, audio_dir, assets_dir, **kw)
                 if isinstance(c, list):
                     out.extend(c)

@@ -36,8 +36,8 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from osu2gakuran import (FORMAT_VERSION, assign_ranks, begin_batch, place_media,
-                         sanitize_id, tier_for, write_chart_json)
+from osu2gakuran import (FORMAT_VERSION, assign_ranks, batch_aborted, begin_batch,
+                         place_media, sanitize_id, tier_for, write_chart_json)
 
 
 def parse_sm(text: str):
@@ -219,6 +219,8 @@ def convert_file(sm_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path,
     present inside the chart's block wins, else the global header (StepMania
     .ssc override semantics). Files without overrides behave exactly as before.
     """
+    if batch_aborted():
+        return []  # an earlier refusal killed the batch: convert nothing more
     text = sm_path.read_text(encoding="utf-8", errors="replace")
     tags = parse_sm(text)
     title = tags.get("TITLE", "Unknown").strip() or "Unknown"

@@ -34,8 +34,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from osu2gakuran import (FORMAT_VERSION, LANES, MAX_KEYBOARD_LANES, assign_ranks,
-                         begin_batch, fold_columns, place_media, sanitize_id, tier_for,
-                         write_chart_json)
+                         batch_aborted, begin_batch, fold_columns, place_media,
+                         sanitize_id, tier_for, write_chart_json)
 
 LIST_SECTIONS = ("TimingPoints", "SliderVelocities", "HitObjects")
 
@@ -91,6 +91,8 @@ def fnum(v, default=0.0):
 
 def convert_file(qua_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path,
                  max_lanes=MAX_KEYBOARD_LANES, no_fold=False, source="quaver"):
+    if batch_aborted():
+        return None  # an earlier refusal killed the batch: convert nothing more
     scalars, lists = parse_qua(qua_path.read_text(encoding="utf-8", errors="replace"))
 
     m = re.match(r"Keys(\d+)$", scalars.get("Mode", ""))

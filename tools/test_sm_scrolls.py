@@ -52,6 +52,7 @@ SM = """#TITLE:Old Style;
 
 
 def convert(text, suffix=".ssc"):
+    S.begin_batch()  # each direct call is its own batch: no refusal may leak
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         (d / ("m" + suffix)).write_text(text, encoding="utf-8")
@@ -214,6 +215,7 @@ def test_chart_id_collision_refused_not_overwritten():
     other = SM.replace("#ARTIST:A;", "#ARTIST:B;").replace("150.000", "140.000")
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
+        S.begin_batch()  # delimit: direct calls share process batch state
         (d / "a.sm").write_text(SM, encoding="utf-8")
         (d / "b.sm").write_text(other, encoding="utf-8")
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -228,6 +230,7 @@ def test_chart_id_collision_refused_not_overwritten():
         assert leftovers == [], [p.name for p in leftovers]
         # identical re-convert stays idempotent (no refusal)
         (d / "b.sm").write_text(SM, encoding="utf-8")
+        S.begin_batch()  # new batch: the refusal above must not leak into it
         err2 = io.StringIO()
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err2):
             third = S.convert_file(d / "b.sm", d / "c", d / "a", d / "s")
@@ -241,6 +244,7 @@ def test_sanitized_id_collision_detected():
     var = SM.replace("#TITLE:Old Style;", "#TITLE:Old/Style;").replace("150.000", "140.000")
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
+        S.begin_batch()  # delimit: direct calls share process batch state
         (d / "a.sm").write_text(SM, encoding="utf-8")
         (d / "b.sm").write_text(var, encoding="utf-8")
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -252,6 +256,39 @@ def test_sanitized_id_collision_detected():
         assert second == [], second
         assert "refusing to overwrite" in err.getvalue(), err.getvalue()
         assert list((d / "c").glob("*.json")) == [], "rolled back"
+
+
+def test_full_cli_rerun_multi_difficulty_idempotent():
+    # AUDIT P1-2: rank is assigned AFTER writing (assign_ranks rewrites the
+    # files), so a rerun constructs rank=1 where the saved files carry final
+    # ranks. Rank is excluded from collision identity: the second full run
+    # must exit 0 with zero byte changes.
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        (d / "m.ssc").write_text(SSC2, encoding="utf-8")
+
+        def run():
+            argv = ["sm2gakuran.py", str(d / "m.ssc"), "--charts-dir", str(d / "c"),
+                    "--audio-dir", str(d / "a"), "--assets-dir", str(d / "s")]
+            old = sys.argv
+            sys.argv = argv
+            try:
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    return S.main()
+            finally:
+                sys.argv = old
+
+        def snap():
+            return {p.name: p.read_bytes() for p in sorted((d / "c").glob("*.json"))}
+
+        assert run() == 0
+        first = snap()
+        assert len(first) == 2, sorted(first)
+        # the trap is set: saved ranks are final (Hard carries rank 2), while
+        # a fresh conversion constructs rank 1 for every chart
+        assert json.loads(first["two_diff_hard.json"].decode("utf-8"))["rank"] == 2
+        assert run() == 0
+        assert snap() == first, "rerun changed bytes"
 
 
 def test_unified_frontend_handles_sm_and_ssc():

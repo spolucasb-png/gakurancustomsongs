@@ -72,6 +72,70 @@ def snapshot(d):
     return snap
 
 
+def test_safe_extract_refuses_aliased_and_case_duplicates():
+    # "./a.osu" resolves onto "a.osu": same staged target, must refuse on
+    # every OS. Case variants refuse exactly where the OS folds them.
+    import os as _os
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        dest = d / "stage"
+        dest.mkdir()
+        zp = d / "alias.zip"
+        with zipfile.ZipFile(zp, "w") as zf:
+            zf.writestr("a.osu", OSU_MIN)
+            zf.writestr("./a.osu", OSU_MIN)
+        with zipfile.ZipFile(zp) as zf:
+            try:
+                safe_extract(zf, dest)
+            except ValueError as e:
+                assert "duplicate" in str(e), e
+            else:
+                raise AssertionError("aliased duplicate accepted")
+        zp2 = d / "case.zip"
+        with zipfile.ZipFile(zp2, "w") as zf:
+            zf.writestr("A.osu", OSU_MIN)
+            zf.writestr("a.osu", OSU_MIN)
+        with zipfile.ZipFile(zp2) as zf:
+            if _os.path.normcase("A.osu") == _os.path.normcase("a.osu"):
+                try:
+                    safe_extract(zf, dest)
+                except ValueError as e:
+                    assert "duplicate" in str(e), e
+                else:
+                    raise AssertionError("case duplicate accepted on folding OS")
+            else:
+                assert safe_extract(zf, dest) == 2
+
+
+def corrupt_payload(data: bytes, needle: bytes) -> bytes:
+    # Flip one stored payload byte without touching headers: the central
+    # directory stays readable, the member CRC breaks on read.
+    i = data.find(needle)
+    assert i >= 0, needle
+    return data[:i] + bytes([data[i] ^ 0x01]) + data[i + 1:]
+
+
+def test_crc_corrupt_archives_skip_cleanly_both_formats():
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        raw = d / "raw.zip"
+        with zipfile.ZipFile(raw, "w") as zf:
+            zf.writestr("song.osu", OSU_MIN)
+        bad = corrupt_payload(raw.read_bytes(), b"Mode: 3")
+        (d / "bad.osz").write_bytes(bad)
+        rawq = d / "rawq.zip"
+        with zipfile.ZipFile(rawq, "w") as zf:
+            zf.writestr("m.qua", QUA)
+        badq = corrupt_payload(rawq.read_bytes(), b"Keys4")
+        (d / "bad.qp").write_bytes(badq)
+        before = snapshot(d)
+        for arch, needle in (("bad.osz", "Bad CRC"), ("bad.qp", "Bad CRC")):
+            rc, _, err = run_frontend(d / arch, d)
+            assert rc == 1, (arch, rc)
+            assert needle in err, (arch, err)
+        assert snapshot(d) == before, "corrupt archive left output behind"
+
+
 def test_safe_extract_refuses_traversal():
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
@@ -198,6 +262,78 @@ def test_colliding_batch_aborts_tree_pristine():
         assert rc == 1, rc
         assert "batch aborted" in err and "collision" in err, err
         assert snapshot(d) == before, "partial output survived the abort"
+
+
+def test_abort_stops_later_writes_including_media():
+    # Unique charts BEFORE and AFTER the collision (plus media on both sides)
+    # must not persist: refusal aborts the batch, rollback removes everything.
+    sm_good = (SM_A.replace("#TITLE:Same Song;", "#TITLE:Good Song;")
+                     .replace("#OFFSET:0;", "#OFFSET:0;\n#MUSIC:m.mp3;"))
+    sm_late = (SM_A.replace("#TITLE:Same Song;", "#TITLE:Late Song;")
+                     .replace("#OFFSET:0;", "#OFFSET:0;\n#MUSIC:late.mp3;"))
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        src = d / "src"
+        src.mkdir()
+        (src / "m.mp3").write_bytes(b"fake-audio-good")
+        (src / "late.mp3").write_bytes(b"fake-audio-late")
+        (src / "a.sm").write_text(sm_good, encoding="utf-8")
+        (src / "b1.sm").write_text(SM_A, encoding="utf-8")
+        (src / "b2.sm").write_text(SM_B, encoding="utf-8")
+        (src / "c.sm").write_text(sm_late, encoding="utf-8")
+        rc, _, err = run_frontend(src, d)
+        assert rc == 1, rc
+        assert "batch aborted" in err, err
+        leftovers = (list((d / "c").glob("*")) if (d / "c").is_dir() else [])
+        leftovers += (list((d / "a").glob("*")) if (d / "a").is_dir() else [])
+        leftovers += (list((d / "s").glob("*")) if (d / "s").is_dir() else [])
+        assert leftovers == [], [p.name for p in leftovers]
+
+
+def test_abort_inside_archive_stops_members_and_preserves_existing():
+    # Archive members [a_twin (collides with pre-existing), z_late (unique)]:
+    # the twin refuses, the loop breaks before z_late, the pre-existing file
+    # survives byte-for-byte, nothing is added.
+    twin = OSU_MIN.replace("Title:T", "Title:Same Song")
+    late = OSU_MIN.replace("Title:T", "Title:Late Song")
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        (d / "seed.sm").write_text(SM_A, encoding="utf-8")
+        rc, _, _ = run_frontend(d / "seed.sm", d)
+        assert rc == 0, rc
+        victim = d / "c" / "same_song_hard.json"
+        original = victim.read_bytes()
+        (d / "seed.sm").unlink()
+        with zipfile.ZipFile(d / "box.osz", "w") as zf:
+            zf.writestr("a_twin.osu", twin)
+            zf.writestr("z_late.osu", late)
+        before = snapshot(d)
+        rc, _, err = run_frontend(d / "box.osz", d)
+        assert rc == 1, rc
+        assert "batch aborted" in err, err
+        assert victim.read_bytes() == original, "pre-existing file damaged"
+        assert snapshot(d) == before, "partial output survived the abort"
+
+
+def test_rollback_failures_are_reported():
+    # A deletion that fails must be recorded + warned, not silently swallowed.
+    import osu2gakuran as O
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        target = d / "stuck.json"
+        target.write_text("x")
+        O.WRITTEN_CHARTS.append(target)
+        real_unlink = Path.unlink
+        Path.unlink = lambda self, *a, **k: (_ for _ in ()).throw(OSError("locked"))
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                O.rollback_batch()
+        finally:
+            Path.unlink = real_unlink
+            O.WRITTEN_CHARTS.clear()
+            O.ROLLBACK_ERRORS.clear()
+    assert "could not delete" in err.getvalue(), err.getvalue()
 
 
 def test_existing_file_collision_preserved_byte_for_byte():
