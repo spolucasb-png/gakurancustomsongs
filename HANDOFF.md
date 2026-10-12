@@ -23,6 +23,7 @@ committed is lost. So:
 - Converter output verified against design (13/13 beats, 8/8 scroll points verbatim). Self-correction on record: first draft misplaced 3 taps on transition boundaries (20/32/48 instead of 21/33/49); caught on output inspection (19.2 vs 19.6 s duration), fixed with one revert of a wrong-measure edit plus the two correct moves, re-verified 13/13.
 - NO converter/test code touched (verified path frozen, session 23). No new regression test: this is a gameplay fixture, not a code change.
 - Next: user deploys overlay + playtests Etterna vs Gakuran at the windows above; record expected-vs-observed before any code talk.
+- DEPLOYED on review go-ahead (2 new files only: JSON + wav; no overwrites, no converter/production/workspace-file changes). Deployed JSON re-parsed from the workspace path: 13 notes, 8 SV. Awaiting user playtest per the section table (baseline <6.4 / stop 6.4-8.0 / reverse 11.2-12.8 / combined freeze 16.0-17.6 / slow reverse 17.6-19.2 / resume 19.2+).
 
 ### Session 22 (2026-10-12): April Showers LIVE-VERIFIED by user ("same as same")
 - User playtested Etterna vs Gakuran: scroll-rate behavior matches. Rate-variation fidelity on a single-BPM `.ssc` chart is VERIFIED by user eyeball (final authority). Scope honesty preserved: this says nothing about stops/reverses — zero/negative scrolls still untested anywhere (no local chart has them; synthetic chart remains the next step if wanted).
