@@ -447,7 +447,8 @@ The plan is now the parent-row + wheel difficulty submenu design in "Current foc
 - [ ] Playlist / queue / shuffle.
 - [ ] Practice mode: start from a timestamp, loop a section, no-fail. Speed rate depends on how the engine reads the audio clock, so check that first.
 
-### 13. Notes do not render during pause sections (user report 2026-10-11) - CLOSED, faithful-by-design
+### 13. Notes do not render during pause sections (user report 2026-10-11) - REOPENED 2026-10-12 (was: closed, faithful-by-design)
+- [ ] REOPENED 2026-10-12 by the user's correction: in Quaver the notes STOP and teleport to the receptors in beat, in the port they keep scrolling and teleport badly, so "full SV preservation" is NOT 100% Quaver. The verdict below only proved drawn positions equal the integral of the .qua SV for notes that exist. Hypotheses (visibility completeness vs time-gated spawn, clock/sampling, Quaver position math, note release) and the plan are in HANDOFF.md, section "REOPENED (session 14)". No code changed yet. Do not trust the lines below as proof of Quaver parity.
 - [x] Investigated live (client 13984, ball_hard, deployed v2.0.30): every in-window note has an instance in all samples, cursor advances at density, spawnCapped=0, errors=0 — spawn path healthy. The "pauses" are the map's authored ±4.4M teleports (±132,000px flings, e.g. −69 scroll-sec at 20.403s) and 20s/15s/12s negative runs; the loader integral matches a from-source Quaver reference, and 10-decimal beats are ruled out (strictly increasing, 0 dups). Same thing renders in real Quaver. Details in HANDOFF.md ("NEXT TASK (session 13)"). Optional, not built: display-displacement clamp (unfaithful, on request only).
 - [ ] Parked: single-difficulty star badge for custom songs (redo on current `GakuranChart.lua`; `GakuranChart_v2.0.10.lua` is a stale untracked draft, do not reuse blindly).
 
