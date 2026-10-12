@@ -135,7 +135,7 @@ do not re-run blindly): `C:\Users\Administrator\_gk_patch\qua_sv_stats.py`
   SV 4 dec / notes 4 dec 12.0% within 1 px | SV 12 dec / notes 4 dec 71.4% |
   SV 8 / notes 8: 96.6% (max 3.3 px) | SV 10 / notes 10: 100% (max 0.5 px) |
   12 / 12: 100% (0 px), end-of-song offset 5e-5 scroll-s.
-- FIX PLAN (NOT applied, awaiting user go-ahead; converter-only, no loader
+- FIX PLAN (APPROVED by the user 21:07, IN PROGRESS - checklist below; converter-only, no loader
   change, no version bump): in `tools/qua2gakuran.py` store note beats, hold
   lengths and scrollChanges beats with 10 decimals instead of 4 (osu path
   untouched: its SV times are integer ms). The same-grid collapse then only
@@ -150,6 +150,25 @@ do not re-run blindly): `C:\Users\Administrator\_gk_patch\qua_sv_stats.py`
   to delete after the fix is verified.
 - Test hygiene: my play wrote a 0-score row for ball_hard_sv_ballin; removed
   with `clearScores("ball_hard_sv_ballin")` (Scores.json had no other rows).
+- CHECKLIST for the precision fix (update after EVERY step, commit small):
+  - [ ] ROADMAP item 12 + this file updated BEFORE coding (user asked; done in
+    the commit that adds this checklist).
+  - [ ] `tools/qua2gakuran.py`: BEAT_DECIMALS = 10 for note `b`/`d` (both the
+    plain and the folded path) and scrollChanges `b`; the same-grid collapse
+    key follows. Rates stay at 4 decimals. osu/sm converters untouched.
+  - [ ] Offline test `tools/test_qua_precision.py`: the +9856/-9856/1.0 spike
+    triple keeps 3 distinct points and zero net displacement; existing tests
+    (`test_fold.py`, `check.py`) still pass.
+  - [ ] Back up the 4 Quaver chart JSONs (`ball_hard_sv_ballin`,
+    `ball_hard_skrubble_s_ball`, `bozo_bozo_cope`, `halloween_day_spooked_sv`)
+    to `_scratch_convert\workspace_charts_backup_before_precision`, convert
+    from the .qp files into a TEMP dir, diff against the workspace charts (only
+    b/d/SV-b precision and SV point counts may differ), then copy the JSONs.
+  - [ ] Offline sim on the new JSON (`qua_sv_sim4.py` style, expect >=99.9% within
+    1 px) and the LIVE sampler (`sv_live_sampler.luau`) on the playing client;
+    0 errors; `clearScores("ball_hard_sv_ballin")`; disconnect `_G.__gkSim.conn`.
+  - [ ] `python tools/check.py`, commit, record results in ROADMAP item 12.
+  Rollback: restore the 4 JSONs from the backup folder; revert the converter commit.
 
 ### DONE (session 9): hit flash / hit ring orientation fixed in v2.0.29 (user approved 15:57)
 No current task is open from this session. DEPLOYED v2.0.29, workspace == repo.

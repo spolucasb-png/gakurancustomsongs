@@ -412,6 +412,25 @@ parent rows and submenu (A2/A3) and is untouched.
   play through spike zone 0 errors, Ievan regression 107/107 clean, osu
   day_by_day 420 floors restored + verified, scores cleared. Remaining:
   user eyeball vs Quaver feel.
+- [!] CORRECTION (session 11, client 13984, v2.0.30): v2.0.30 does NOT match
+  the real Quaver file on ball_hard. Full play with a per-frame sampler
+  (drawn note-Y differences vs the integral of the ORIGINAL .qua SV): only
+  17.3% of 107,675 note-pair samples within 1 px, 37,756 over 50 px, 0 errors;
+  reproduced offline from the chart JSON, so the data is wrong, not the loader.
+  Root cause: beats are stored as `round(t_ms / ref_bl, 4)` = 0.0308 ms steps,
+  but the map's 170 teleport spikes are 0.0156 ms wide, so spike pairs lose
+  their cancelling point (e.g. +9856 / -9856 / 1.0 at 4864.9844 / 4865.0000 /
+  4865.0156 ms becomes +9856 held 0.0308 ms) and leave permanent offsets
+  (-574 scroll-seconds by song end). Note times matter too (notes sit inside
+  spike windows). Offline sweep (same samples): SV and notes at 4 decimals
+  12% within 1 px, 8 decimals 96.6%, 10 decimals 100% (max 0.5 px).
+- [ ] FIX APPROVED (user, session 11) - IN PROGRESS, converter-only (no loader
+  change, no version bump): `tools/qua2gakuran.py` stores note beats, hold
+  lengths and scrollChanges beats with 10 decimals (osu path untouched: its SV
+  times are integer ms). Then: offline test for the spike triple, re-convert
+  the 4 Quaver charts (ball_hard x2, bozo, halloween) with backups, offline sim
+  on the new JSON, live sampler on the playing client (expect >=99.9% within
+  1 px), scores cleared. Scratch + sampler in `_gk_patch/` (see HANDOFF).
 
 ## Later / future add-ons
 
