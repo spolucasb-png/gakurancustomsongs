@@ -3,6 +3,7 @@
 Run: python tools/test_sm_scrolls.py   (exit code 0 = all passed)"""
 import contextlib
 import io
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -204,6 +205,53 @@ def test_notes2_block_parses():
     assert len(charts) == 1, charts
     assert charts[0]["id"] == "n2_edit", charts[0]["id"]
     assert [(n["b"], n["l"]) for n in charts[0]["charts"]["Keyboard"]] == [(0.0, 4)]
+
+
+def test_chart_id_collision_refused_not_overwritten():
+    # AUDIT item 14 HIGH 03: same chart id from a different file must never
+    # silently overwrite — and the batch aborts with ZERO partial output
+    # (the first chart's files are rolled back too, not left behind).
+    other = SM.replace("#ARTIST:A;", "#ARTIST:B;").replace("150.000", "140.000")
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        (d / "a.sm").write_text(SM, encoding="utf-8")
+        (d / "b.sm").write_text(other, encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            first = S.convert_file(d / "a.sm", d / "c", d / "a", d / "s")
+        assert len(first) == 1
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            second = S.convert_file(d / "b.sm", d / "c", d / "a", d / "s")
+        assert second == [], second
+        assert "refusing to overwrite" in err.getvalue(), err.getvalue()
+        leftovers = list((d / "c").glob("*.json")) + list((d / "a").glob("*"))
+        assert leftovers == [], [p.name for p in leftovers]
+        # identical re-convert stays idempotent (no refusal)
+        (d / "b.sm").write_text(SM, encoding="utf-8")
+        err2 = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err2):
+            third = S.convert_file(d / "b.sm", d / "c", d / "a", d / "s")
+        assert len(third) == 1, third
+        assert "refusing to overwrite" not in err2.getvalue(), err2.getvalue()
+
+
+def test_sanitized_id_collision_detected():
+    # "A/B" and "A B" normalize to the same chart id: the collision is about
+    # the ID contract, not the raw titles.
+    var = SM.replace("#TITLE:Old Style;", "#TITLE:Old/Style;").replace("150.000", "140.000")
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        (d / "a.sm").write_text(SM, encoding="utf-8")
+        (d / "b.sm").write_text(var, encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            first = S.convert_file(d / "a.sm", d / "c", d / "a", d / "s")
+        assert len(first) == 1
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            second = S.convert_file(d / "b.sm", d / "c", d / "a", d / "s")
+        assert second == [], second
+        assert "refusing to overwrite" in err.getvalue(), err.getvalue()
+        assert list((d / "c").glob("*.json")) == [], "rolled back"
 
 
 def test_unified_frontend_handles_sm_and_ssc():

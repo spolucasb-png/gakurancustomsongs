@@ -66,6 +66,7 @@ def main():
                     choices=range(4, MAX_KEYBOARD_LANES + 1))
     args = ap.parse_args()
 
+    osu.begin_batch()
     results = []
     for inp in args.input:
         if inp.is_dir():
@@ -109,7 +110,9 @@ def main():
                 results.append(c)
         else:
             print(f"  - skipped '{inp}': unknown extension", file=sys.stderr)
-    assign_ranks(args.charts_dir, results)
+    ok = assign_ranks(args.charts_dir, results)
+    if not ok:
+        return 1
     print(f"Done: {len(results)} chart(s) converted")
     return 0 if results else 1
 

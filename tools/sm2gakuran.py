@@ -36,8 +36,8 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from osu2gakuran import (FORMAT_VERSION, assign_ranks, place_media, sanitize_id,
-                         tier_for)
+from osu2gakuran import (FORMAT_VERSION, assign_ranks, begin_batch, place_media,
+                         sanitize_id, tier_for, write_chart_json)
 
 
 def parse_sm(text: str):
@@ -348,8 +348,11 @@ def convert_file(sm_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path,
         if bg_name:
             chart["backgroundFile"] = bg_name
 
-        (out_dir / f"{chart_id}.json").write_text(
-            json.dumps(chart, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        if not write_chart_json(out_dir, chart_id, chart):
+            print(f"  ! ERROR: refusing to overwrite '{chart_id}.json': exists with different "
+                  f"content (same chart id from another file/format?) — delete it explicitly "
+                  f"or rename the source", file=sys.stderr)
+            return []
         print(f"  -> {chart_id}.json: {len(notes)} notes, {ref_bpm} BPM, {duration:.1f}s"
               + (f", {len(scroll_changes)} SV points" if scroll_changes else ""))
         for w in nwarnings:
@@ -372,12 +375,15 @@ def main():
     sm_files = (sorted(p for p in args.input.rglob("*") if p.is_file()
                       and p.suffix.lower() in {".sm", ".ssc"})
                 if args.input.is_dir() else [args.input])
+    begin_batch()
     results = []
     for sm in sm_files:
         results.extend(convert_file(sm, args.charts_dir, args.audio_dir,
                                     args.assets_dir,
                                     source=args.source or "etterna"))
-    assign_ranks(args.charts_dir, results)
+    ok = assign_ranks(args.charts_dir, results)
+    if not ok:
+        return 1
     print(f"Done: {len(results)} chart(s) converted")
     return 0 if results else 1
 

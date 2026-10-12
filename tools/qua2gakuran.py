@@ -34,7 +34,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from osu2gakuran import (FORMAT_VERSION, LANES, MAX_KEYBOARD_LANES, assign_ranks,
-                         fold_columns, place_media, sanitize_id, tier_for)
+                         begin_batch, fold_columns, place_media, sanitize_id, tier_for,
+                         write_chart_json)
 
 LIST_SECTIONS = ("TimingPoints", "SliderVelocities", "HitObjects")
 
@@ -227,8 +228,11 @@ def convert_file(qua_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
         chart["backgroundFile"] = f"GakuranCharts/Assets/{dst.name}"
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"{chart_id}.json").write_text(
-        json.dumps(chart, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    if not write_chart_json(out_dir, chart_id, chart):
+        print(f"  ! ERROR: refusing to overwrite '{chart_id}.json': exists with different "
+              f"content (same chart id from another file/format?) — delete it explicitly "
+              f"or rename the source", file=sys.stderr)
+        return None
     print(f"  -> {chart_id}.json: {len(notes)} notes, {ref_bpm} BPM (ref), "
           f"{len(anim_changes)} BPM changes, {duration:.1f}s"
           + (f", {len(scroll_changes)} SV points" if scroll_changes else ""))
@@ -269,6 +273,7 @@ def main():
     kw = dict(max_lanes=args.max_lanes, no_fold=args.no_fold,
               source=args.source or "quaver")
     inp = args.input
+    begin_batch()
     results = []
     if inp.suffix.lower() == ".qp":
         results = convert_qp(inp, args.charts_dir, args.audio_dir, args.assets_dir, **kw)
@@ -278,7 +283,9 @@ def main():
             c = convert_file(qua, args.charts_dir, args.audio_dir, args.assets_dir, **kw)
             if c:
                 results.append(c)
-    assign_ranks(args.charts_dir, results)
+    ok = assign_ranks(args.charts_dir, results)
+    if not ok:
+        return 1
     print(f"Done: {len(results)} chart(s) converted")
     return 0 if results else 1
 

@@ -372,10 +372,79 @@ def place_media(src: Path, dst_dir: Path, base: str) -> Path:
         dst = dst_dir / (f"{base}{ext}" if i == 1 else f"{base}_{i}{ext}")
         if not dst.exists():
             shutil.copy2(src, dst)
+            CREATED_MEDIA.append(dst)
             return dst
         if _sha1(dst) == digest:
             return dst
     raise RuntimeError(f"too many media variants for {base}{ext}")
+
+
+def write_chart_json(out_dir: Path, chart_id: str, chart: dict) -> bool:
+    """Write one chart JSON unless the target exists with DIFFERENT content.
+
+    Returns True when the file was written (or already byte-identical, so
+    re-converting is idempotent). Returns False on refusal: an existing file
+    with different bytes (same chart id from another file/format — e.g.
+    parallel .sm/.ssc twins) is NEVER overwritten, and the refusal rolls back
+    everything this batch created (zero partial output). Unlike media, charts
+    are not auto-suffixed: a second identity for one id would silently fork
+    the wheel row. Callers skip the chart with an ERROR and keep going; the
+    batch epilogue (assign_ranks) turns any refusal into a failed run.
+    """
+    text = json.dumps(chart, ensure_ascii=False, separators=(",", ":"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dest = out_dir / f"{chart_id}.json"
+    if dest.exists():
+        try:
+            same = dest.read_text(encoding="utf-8") == text
+        except OSError:
+            same = False
+        if not same:
+            WRITE_REFUSALS.append((chart_id, str(dest)))
+            rollback_batch()
+        return same
+    dest.write_text(text, encoding="utf-8")
+    WRITTEN_CHARTS.append(dest)
+    return True
+
+
+# Batch-output tracking for the no-overwrite guarantee (audit item 14 HIGH 03).
+# Single-batch assumption: converter CLIs and convert_song.py run one batch
+# per process; tests use isolated temp dirs. Lists below accumulate across
+# direct convert_file calls in one process, which is harmless there because a
+# rollback only deletes paths it recorded (missing files are skipped) and
+# tests never share output dirs.
+WRITTEN_CHARTS = []   # chart JSONs this process created (never pre-existing)
+CREATED_MEDIA = []    # media files this process created (reused ones unlisted)
+WRITE_REFUSALS = []   # (chart_id, dest-string) pairs refused for differing bytes
+
+
+def begin_batch():
+    """Reset batch-output tracking at the start of a converter run.
+
+    Every CLI main and convert_song.main calls this first: one process runs
+    one batch, so leftovers from direct convert_file calls (tests) must not
+    leak into the run's abort decision.
+    """
+    WRITTEN_CHARTS.clear()
+    CREATED_MEDIA.clear()
+    WRITE_REFUSALS.clear()
+
+
+def rollback_batch():
+    """Delete everything this batch created; pre-existing files are untouched.
+
+    Only paths recorded as created-above are removed (missing-ok), so files
+    that predated the batch — including the refused collision target — survive
+    byte-for-byte. Called automatically on the first refusal of a batch.
+    """
+    for paths in (WRITTEN_CHARTS, CREATED_MEDIA):
+        for p in paths:
+            try:
+                Path(p).unlink()
+            except OSError:
+                pass
+        paths.clear()
 
 
 def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path,
@@ -543,8 +612,11 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
 
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{chart_id}.json"
-    out_path.write_text(json.dumps(chart, ensure_ascii=False, separators=(",", ":")),
-                        encoding="utf-8")
+    if not write_chart_json(out_dir, chart_id, chart):
+        print(f"  ! ERROR: refusing to overwrite '{out_path.name}': exists with different "
+              f"content (same chart id from another file/format?) — delete it explicitly "
+              f"or rename the source", file=sys.stderr)
+        return None
     print(f"  -> {out_path.name}: {len(notes)} notes, {ref_bpm} BPM (ref), "
           f"{len(anim_changes)} BPM changes, {duration:.1f}s"
           + (f", {len(scroll_changes)} SV points" if scroll_changes else ""))
@@ -556,7 +628,17 @@ def convert_file(osu_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
 def assign_ranks(charts_dir: Path, charts: list):
     """Rank each song's converted difficulties by note density (1 = easiest)
     and rewrite their JSON. Only covers the charts of this run; the loader
-    treats rank as a hint and falls back to density when ranks disagree."""
+    treats rank as a hint and falls back to density when ranks disagree.
+
+    Returns False (writing nothing) when the batch hit a chart-id refusal:
+    the outputs were already rolled back, so resurrecting rank-only files
+    here would undo the zero-partial-output guarantee. Callers exit nonzero.
+    """
+    if WRITE_REFUSALS:
+        print(f"  ! ERROR: batch aborted: {len(WRITE_REFUSALS)} chart-id collision(s), "
+              f"output tree restored (refused: "
+              + ", ".join(f"'{c}'" for c, _ in WRITE_REFUSALS) + ")", file=sys.stderr)
+        return False
     by_song = {}
     for c in charts:
         by_song.setdefault(c["songId"], []).append(c)
@@ -569,9 +651,11 @@ def assign_ranks(charts_dir: Path, charts: list):
         if len(group) > 1:
             print(f"  song '{song_id}': " + " < ".join(
                 f"{c['difficulty'][c['mode']]} ({c['tier']})" for c in group))
+    return True
 
 
 def main():
+    begin_batch()  # one process runs one batch; reset tracking before converting
     ap = argparse.ArgumentParser(description="Convert osu! maps to GakuranCharts JSON")
     ap.add_argument("input", type=Path, help=".osz or .osu file (or directory of .osu)")
     ap.add_argument("--charts-dir", type=Path, required=True, help="output charts dir")
@@ -621,7 +705,9 @@ def main():
                 results.append(c)
     else:
         ap.error(f"unsupported input: {inp}")
-    assign_ranks(args.charts_dir, results)
+    ok = assign_ranks(args.charts_dir, results)
+    if not ok:
+        return 1
     print(f"Done: {len(results)} chart(s) converted")
     return 0 if results else 1
 
