@@ -424,7 +424,7 @@ parent rows and submenu (A2/A3) and is untouched.
   (-574 scroll-seconds by song end). Note times matter too (notes sit inside
   spike windows). Offline sweep (same samples): SV and notes at 4 decimals
   12% within 1 px, 8 decimals 96.6%, 10 decimals 100% (max 0.5 px).
-- [ ] FIX APPROVED (user, session 11) - IN PROGRESS, converter-only (no loader
+- [x] FIX DONE + VERIFIED (session 13, commits 1d80343 + 947f50f + the doc commit after them): 10-decimal beats in `tools/qua2gakuran.py`, 4 Quaver charts re-converted and deployed. Offline vs raw .qua: ball_hard 100% within 1 px (max 0.53 px), bozo 99.41% (max 1.41 px), halloween/skrubble 100%. LIVE (client 13984, v2.0.30, full play): 95,753 samples, 99.78% within 1 px, 100% within 3 px, 0 over 50 px (was 17.3% within 1 px, 37,756 over 50 px), worst 1.23 px, 0 errors. The >=99.9% within 1 px goal was not literally reached (integer-pixel rounding + 4-decimal rates). Only the user's eyeball vs real Quaver is pending. Original plan: FIX APPROVED (user, session 11), converter-only (no loader
   change, no version bump): `tools/qua2gakuran.py` stores note beats, hold
   lengths and scrollChanges beats with 10 decimals (osu path untouched: its SV
   times are integer ms). Then: offline test for the spike triple, re-convert

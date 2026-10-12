@@ -15,9 +15,11 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
-### Current task (session 10): quaver SV mismatch on "ball hard" (user report, NOT fixed)
+### Current task (session 10): quaver SV mismatch on "ball hard" - FIXED + VERIFIED LIVE in session 13 (only the user's eyeball vs real Quaver is pending; see the checklist at the end of this section)
 Goal: the SV map `ball_hard_sv_ballin` does not move like the original game.
-Status: offline investigation only. NO code changes (tree clean), NO fix
+Status (session 13): this paragraph is the ORIGINAL session-10 status and is
+OUTDATED - the fix is done and live-verified, see the checklist below. Original:
+offline investigation only. NO code changes (tree clean), NO fix
 applied, NOTHING live-verified for a fix. Scratch scripts (outside the repo,
 do not re-run blindly): `C:\Users\Administrator\_gk_patch\qua_sv_stats.py`
 (source census), `C:\Users\Administrator\_gk_patch\qua_sv_sim.py`
@@ -162,15 +164,16 @@ do not re-run blindly): `C:\Users\Administrator\_gk_patch\qua_sv_stats.py`
     triple keeps 3 distinct points and zero net displacement; existing tests
     (`test_fold.py`, `check.py`) still pass. (session 12: 6/6 pass, integral vs raw source
     < 1e-6 scroll-s incl. inside the spikes)
-  - [ ] Back up the 4 Quaver chart JSONs (`ball_hard_sv_ballin`,
+  - [x] (session 13: DONE - backup exists, workspace JSONs == fresh conversion, offline verify_qua_charts.py: ball_hard 100% within 1 px max 0.53 px, bozo 99.41% max 1.41 px, halloween/skrubble 100%) Back up the 4 Quaver chart JSONs (`ball_hard_sv_ballin`,
     `ball_hard_skrubble_s_ball`, `bozo_bozo_cope`, `halloween_day_spooked_sv`)
     to `_scratch_convert\workspace_charts_backup_before_precision`, convert
     from the .qp files into a TEMP dir, diff against the workspace charts (only
     b/d/SV-b precision and SV point counts may differ), then copy the JSONs.
-  - [ ] Offline sim on the new JSON (`qua_sv_sim4.py` style, expect >=99.9% within
+  - [x] (session 13: DONE on client 13984, loader v2.0.30, full 97 s play of `ball_hard_sv_ballin`, SV model 8714 pts: 95,753 note-pair samples, 99.78% within 1 px (spike zone 40.5-45.5 s 100%), 100% within 3 px, 0 samples >50 px (was 17.3% / 37,756), worst 1.23 px, 0 sampler/SV/vis errors. The literal >=99.9%-within-1px target was NOT met (99.78%); the residue is <=1.23 px, consistent with integer-pixel rounding of two positions plus 4-decimal rate rounding. Scores cleared (Scores.json charts=[]), sampler disconnected, instrument attributes nil.) Offline sim on the new JSON (`qua_sv_sim4.py` style, expect >=99.9% within
     1 px) and the LIVE sampler (`sv_live_sampler.luau`) on the playing client;
     0 errors; `clearScores("ball_hard_sv_ballin")`; disconnect `_G.__gkSim.conn`.
-  - [ ] `python tools/check.py`, commit, record results in ROADMAP item 12.
+  - [x] (session 13: check.py 17/17, test_qua_precision 7/7, results in ROADMAP item 12, committed) `python tools/check.py`, commit, record results in ROADMAP item 12.
+  - [ ] User eyeball: play `ball_hard_sv_ballin` and compare the motion with real Quaver (only a human can judge feel). Optional cleanup afterwards: delete `Workspace\GC_simref` (reference data only). If the user is happy, move this whole task to "Recent work" and clear "Current task".
   Rollback: restore the 4 JSONs from the backup folder; revert the converter commit.
 
 ### DONE (session 9): hit flash / hit ring orientation fixed in v2.0.29 (user approved 15:57)
