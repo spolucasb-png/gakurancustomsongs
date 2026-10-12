@@ -119,6 +119,20 @@ def test_same_instant_last_in_file_wins():
     at6 = [c for c in sc if abs(c["b"] * REF_BL_MS - 6000.0) < 1e-6]
     assert len(at6) == 1 and at6[0]["rate"] == 2.0, at6
 
+def test_missing_multiplier_defaults_to_zero():
+    # Quaver .qua maps can omit Multiplier on SV entries whose value is 0.
+    # The next explicit nonzero value must resume scrolling.
+    text = QUA.replace(
+        "SliderVelocities:\n",
+        "SliderVelocities:\n- StartTime: 1000\n- StartTime: 2000\n  Multiplier: 1\n",
+        1,
+    )
+    sc = convert(text)["scrollChanges"]
+    at_start = [c for c in sc if abs(c["b"] * REF_BL_MS - 1000.0) < 1e-4]
+    at_resume = [c for c in sc if abs(c["b"] * REF_BL_MS - 2000.0) < 1e-4]
+    assert len(at_start) == 1 and at_start[0]["rate"] == 0.0, at_start
+    assert len(at_resume) == 1 and at_resume[0]["rate"] == 1.0, at_resume
+
 
 def test_note_and_hold_times_are_precise():
     chart = convert(QUA)

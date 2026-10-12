@@ -15,6 +15,15 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
+### Session 16 (2026-10-12): missing-Multiplier=0 pause bug (external report + fix)
+- External analysis received: `.qua` SV entries with NO `Multiplier` field default to rate 0 in Quaver (uninitialized C# `float` = 0.0f; gameplay treats 0 as "staying"), but `qua2gakuran.py` used `fnum(..., 1.0)` — turning stops into normal scrolling. Files: candidate chart + patch in `C:\Users\Administrator\Downloads\` (do NOT `git apply` the patch: hunk 1 is already present here with identical semantics, hunk 2 needed a blank-line adaptation; do NOT copy the candidate into any chart folder — same song ID).
+- Verified from the raw sources with the proven parser (not trusted blindly): ball_hard 335 omissions (exact times match the report: 4711, 4865.015625, ...), bozo 631, halloween 7; C# default + gameplay "staying" use confirm 0 semantics. CORRECTION to my own session-10 census ("zero: 0"): wrong — the same 1.0 default masked them. The "no pauses" census conclusion is retracted for Quaver charts.
+- Fix: one-line default 1.0 → 0.0 in `tools/qua2gakuran.py` + the report's regression test adapted by hand into the EXISTING `tools/test_qua_precision.py` (it IS in the repo — 7 tests; my earlier "missing" read was wrong, found via disk search). Tests: 8/8, `check.py` 17 files, `test_fold.py` 10/10.
+- Reconverted 3 sets: ball 8714→8723, bozo 9227→9228, halloween unchanged count; non-SV fields byte-identical everywhere. Independent convergence: my output's (time,rate) sets EQUAL their candidate's at ms precision (8723=8723, 0 diffs). Deployed to workspace (backup `_scratch_convert\workspace_charts_backup_before_zerosv`); candidate stays in Downloads.
+- Live verification BLOCKED (not failed): the executor eval queue is wedged — my getgc-heavy probe never returned and even trivial evals queue behind it (bridge alive per `runtime_status`, console readable). Do NOT stack more evals. Next: user rejoins/restarts the client, then rerun the lightweight probe (load/play/svStatus/stop/clear, NO getgc scans).
+- Pre-existing, tolerated, not mine: `Instance` capability-Plugin errors at play start/end in the console log; plays proceed and notes render.
+- Scratch staleness: `_gk_patch\qua_audit.py` hardcodes old clamp semantics — do not re-run blindly.
+
 ### Session 15 (2026-10-12): continue SV pause/teleport checks (cut off mid-step)
 - User decision (answering "how to unblock Real"): BACK TO MADIUM, "real is
   bugged or sum". Real work is parked, not deleted: the deployed files stay

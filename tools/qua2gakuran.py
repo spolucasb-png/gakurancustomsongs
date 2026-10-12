@@ -154,7 +154,11 @@ def convert_file(qua_path: Path, out_dir: Path, audio_dir: Path, asset_dir: Path
         {"t": round(t / 1000.0, 3), "bpm": round(b, 2)} for t, b in tps[1:]
     ]
     scroll_changes = []
-    svs = sorted(((fnum(i.get("StartTime")), fnum(i.get("Multiplier"), 1.0))
+    # A MISSING Multiplier means rate 0 (Quaver's SliderVelocityInfo.Multiplier
+    # is an uninitialized C# float = 0.0f, and gameplay treats 0 as "staying
+    # in the same spot"). The old default of 1.0 turned 335 stops on ball_hard
+    # (631 on bozo, 7 on halloween) into normal scrolling - the pause bug.
+    svs = sorted(((fnum(i.get("StartTime")), fnum(i.get("Multiplier"), 0.0))
                   for i in lists["SliderVelocities"]), key=lambda p: p[0])
     for t_ms, mult in svs:
         # Rates kept VERBATIM (negatives, zero, extremes): the loader model

@@ -431,6 +431,7 @@ parent rows and submenu (A2/A3) and is untouched.
   the 4 Quaver charts (ball_hard x2, bozo, halloween) with backups, offline sim
   on the new JSON, live sampler on the playing client (expect >=99.9% within
   1 px), scores cleared. Scratch + sampler in `_gk_patch/` (see HANDOFF).
+- [x] Missing-Multiplier=0 fix (session 16, external report verified): omitted `Multiplier` = rate 0 in Quaver (335 ball_hard / 631 bozo / 7 halloween); converter default 1.0→0.0, regression test added (8/8 green), charts reconverted (ball 8723, bozo 9228, halloween 13985; non-SV identical; output matches the external candidate exactly), deployed with backup. Live verification pending client rejoin (eval queue wedged by a getgc-heavy probe — no more scans until then).
 
 ## Later / future add-ons
 
