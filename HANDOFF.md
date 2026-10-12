@@ -20,6 +20,7 @@ committed is lost. So:
 - Collision check: no `*april*` in the 36-chart Madium workspace — clean. Staged a drop-in overlay at `Referencesandmods\\_scratch_convert\\april_test_workspace\\GakuranCharts\\{Charts,Audio,Assets}` (single JSON + mp3 + jpg); known-good workspace untouched. To deploy: copy the overlay's `GakuranCharts/*` over the workspace root.
 - Playtest timestamps for the user (158 BPM): wobble beats 113.5-115 -> song ~43.1-43.7s (0.2<->3.0); dip beat 242-244 -> ~91.9-92.7s (0.75). Compare those windows in Etterna vs Gakuran; record timing/position diffs BEFORE any code change.
 - Step 3 (live play) is the user's — NOT done this turn, no evals ran.
+- Deployed to the Madium workspace on user request (overlay copy: 1 JSON + mp3 + jpg, additive, no overwrites). Loader should list it next init; playtest windows ~43.1-43.7s and ~91.9-92.7s.
 
 ### Session 20 (2026-10-12): review verdict on 7abc34b = PASS for controlled testing (docs only)
 - Reviewer confirms all 3 prior findings fixed (unified frontend, per-chart timing, NOTES2); did not execute the suite locally. Verdict: ready for a controlled single-BPM test, not proof of full SSC fidelity.
