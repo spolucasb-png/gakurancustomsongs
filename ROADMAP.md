@@ -461,6 +461,7 @@ The plan is now the parent-row + wheel difficulty submenu design in "Current foc
 may not lift it). Parallel no-risk path: getgc-free discovery via getnilinstances+require (proven
 for modules); wheel controller route still open. Awaiting user reply.
 - [x] (session 15) sessionCustom=false artifact resolved: post-song-end sampling (song 93.3s), not a loader bug — gen stayed 1, no second actor. SV builds on direct AND picker paths (custom=true/8714 both; playable songId=ball_hard via pick). 30→88s re-captured with model confirmed active: healthy throughout. Lesson recorded in HANDOFF: end captures before song end + mid-run svStatus.
+- [x] (session 15) User reports motion persists in pause SV on this build. Killed live: engine-wins (34 spike-zone frames all follow MODEL, 3 exact where engine diverged 100–181px), rogue positioning loops (connection census: 1 string-chunk conn = ours; none rhythm-named), clock (400 frames smooth/monotonic, no jumps). Everything measurable healthy — NEED precise timestamp+chart of wrong motion to go further (asking).
 
 ### Bigger projects
 - [ ] More converters: Clone Hero `.chart`/`.mid`, StepMania `.sm`/`.ssc`, Quaver `.qua`.
