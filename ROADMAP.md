@@ -460,6 +460,7 @@ The plan is now the parent-row + wheel difficulty submenu design in "Current foc
 (find the getgc entry; the refusal fires on comments so the gate is likely server-side and toggles
 may not lift it). Parallel no-risk path: getgc-free discovery via getnilinstances+require (proven
 for modules); wheel controller route still open. Awaiting user reply.
+- [x] (session 15) sessionCustom=false artifact resolved: post-song-end sampling (song 93.3s), not a loader bug — gen stayed 1, no second actor. SV builds on direct AND picker paths (custom=true/8714 both; playable songId=ball_hard via pick). 30→88s re-captured with model confirmed active: healthy throughout. Lesson recorded in HANDOFF: end captures before song end + mid-run svStatus.
 
 ### Bigger projects
 - [ ] More converters: Clone Hero `.chart`/`.mid`, StepMania `.sm`/`.ssc`, Quaver `.qua`.
