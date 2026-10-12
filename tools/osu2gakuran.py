@@ -401,7 +401,9 @@ def write_chart_json(out_dir: Path, chart_id: str, chart: dict) -> bool:
     if dest.exists():
         try:
             existing = dest.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, ValueError):
+            # ValueError covers UnicodeDecodeError: unreadable bytes are a
+            # conflict, not a pass. See the dict check below.
             existing = None
         if existing == text:
             return True
@@ -409,11 +411,14 @@ def write_chart_json(out_dir: Path, chart_id: str, chart: dict) -> bool:
         # so a rerun constructs rank=1 where the saved file has rank=2: that
         # alone must not read as a collision. Normalized-equal keeps the saved
         # (ranked) file and returns True; assign_ranks recomputes ranks anyway.
-        # Any other byte difference is still a refusal.
+        # Any other byte difference is still a refusal. A non-object saved
+        # value (e.g. [] or null) is a conflict, never a crash: isinstance is
+        # checked because only ValueError is caught, not AttributeError.
         try:
+            parsed = json.loads(existing) if existing is not None else None
             same_shape = (
-                existing is not None
-                and {k: v for k, v in json.loads(existing).items() if k != "rank"}
+                isinstance(parsed, dict)
+                and {k: v for k, v in parsed.items() if k != "rank"}
                 == {k: v for k, v in chart.items() if k != "rank"}
             )
         except ValueError:
@@ -430,26 +435,42 @@ def write_chart_json(out_dir: Path, chart_id: str, chart: dict) -> bool:
 
 # Batch-output tracking for the no-overwrite guarantee (audit item 14 HIGH 03).
 # Single-batch assumption: converter CLIs and convert_song.py run one batch
-# per process; tests use isolated temp dirs. Lists below accumulate across
-# direct convert_file calls in one process, which is harmless there because a
-# rollback only deletes paths it recorded (missing files are skipped) and
-# tests never share output dirs.
+# per process (delimited by begin_batch); tests use isolated temp dirs and
+# delimit direct calls explicitly. A rollback only deletes recorded paths
+# (missing-ok), so cross-batch residue in one process is harmless.
 WRITTEN_CHARTS = []   # chart JSONs this process created (never pre-existing)
 CREATED_MEDIA = []    # media files this process created (reused ones unlisted)
 WRITE_REFUSALS = []   # (chart_id, dest-string) pairs refused for differing bytes
 ROLLBACK_ERRORS = []  # (path-string, error) deletions that failed during rollback
+PREBATCH_IDS = set()  # chart ids present in charts_dir when the batch started
 
 
-def begin_batch():
+def begin_batch(charts_dir=None):
     """Reset batch-output tracking at the start of a converter run.
 
-    Every CLI main and convert_song.main calls this first: one process runs
-    one batch, so leftovers from direct convert_file calls (tests) must not
-    leak into the run's abort decision. Direct library users delimit their
-    own batches the same way: calls between two begin_batch() calls share
-    one batch (a refusal rolls back all of it); calls after a fresh
-    begin_batch() start clean.
+    Every CLI main and convert_song.main calls this first (with its
+    charts_dir): one process runs one batch, so leftovers from direct
+    convert_file calls (tests) must not leak into the run's abort decision.
+    Direct library users delimit their own batches the same way: calls
+    between two begin_batch() calls share one batch (a refusal rolls back
+    all of it); calls after a fresh begin_batch() start clean.
+
+    The charts_dir snapshot records which chart ids predate the batch. It is
+    the only way to tell a genuinely new difficulty (provisional rank, warn)
+    from a rerun (preserved rank): by assign time, new files are already on
+    disk with their default rank, indistinguishable otherwise.
     """
+    WRITTEN_CHARTS.clear()
+    CREATED_MEDIA.clear()
+    WRITE_REFUSALS.clear()
+    ROLLBACK_ERRORS.clear()
+    PREBATCH_IDS.clear()
+    if charts_dir is not None:
+        try:
+            for f in Path(charts_dir).glob("*.json"):
+                PREBATCH_IDS.add(f.stem)
+        except OSError:
+            pass
     WRITTEN_CHARTS.clear()
     CREATED_MEDIA.clear()
     WRITE_REFUSALS.clear()
@@ -677,10 +698,36 @@ def assign_ranks(charts_dir: Path, charts: list):
               f"output tree restored (refused: "
               + ", ".join(f"'{c}'" for c, _ in WRITE_REFUSALS) + ")", file=sys.stderr)
         return False
+    disk = _disk_song_ranks(charts_dir)
     by_song = {}
     for c in charts:
         by_song.setdefault(c["songId"], []).append(c)
     for song_id, group in by_song.items():
+        known = disk.get(song_id, {})
+        run_ids = {c["id"] for c in group}
+        missing = sorted(set(known) - run_ids)
+        if missing:
+            # PARTIAL run: known chart files sharing the songId are not
+            # covered by this batch (e.g. rerunning one difficulty of three,
+            # or adding a difficulty without its siblings). Policy (b):
+            # preserve saved ranks exactly — existing files are NOT rewritten.
+            # New ids keep their provisional rank with a loud warning instead
+            # of a silently-final one. (A run covering every known chart, even
+            # with extra new ones, counts as complete.)
+            provisional = []
+            for c in group:
+                if c["id"] in PREBATCH_IDS and known.get(c["id"]) is not None:
+                    c["rank"] = known[c["id"]]
+                else:
+                    # New this batch (no pre-batch file) or saved without a
+                    # rank: ordering unknown, keep provisional, warn loudly.
+                    provisional.append(c["difficulty"][c["mode"]])
+            if provisional:
+                print(f"  ! WARNING: partial song '{song_id}': rank provisional for "
+                      f"[{', '.join(provisional)}] (missing from this run: "
+                      f"{', '.join(missing)}); run a full-song "
+                      f"conversion to finalize ordering", file=sys.stderr)
+            continue
         group.sort(key=lambda c: (c["noteCount"] / max(c["duration"], 1.0), c["noteCount"]))
         for i, c in enumerate(group, 1):
             c["rank"] = i
@@ -692,8 +739,31 @@ def assign_ranks(charts_dir: Path, charts: list):
     return True
 
 
+def _disk_song_ranks(charts_dir: Path) -> dict:
+    """Minimal metadata scan: {songId: {chart_id: saved_rank_or_None}}.
+
+    Only id/songId/rank are read; unreadable files are skipped (a corrupt
+    sibling must not crash ranking). Used to tell complete groups (rank +
+    rewrite) from partial ones (preserve, never rewrite).
+    """
+    out = {}
+    if not charts_dir.is_dir():
+        return out
+    for f in sorted(charts_dir.glob("*.json")):
+        try:
+            c = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(c, dict):
+            continue
+        sid, cid = c.get("songId"), c.get("id")
+        if isinstance(sid, str) and isinstance(cid, str):
+            r = c.get("rank")
+            out.setdefault(sid, {})[cid] = r if isinstance(r, int) else None
+    return out
+
+
 def main():
-    begin_batch()  # one process runs one batch; reset tracking before converting
     ap = argparse.ArgumentParser(description="Convert osu! maps to GakuranCharts JSON")
     ap.add_argument("input", type=Path, help=".osz or .osu file (or directory of .osu)")
     ap.add_argument("--charts-dir", type=Path, required=True, help="output charts dir")
@@ -717,6 +787,7 @@ def main():
                     help="origin engine tag written into each chart (default osu)")
     args = ap.parse_args()
 
+    begin_batch(args.charts_dir)
     kw = dict(mode_override=args.mode, include_nonmania=args.include_nonmania,
               allow_lossy_keys=args.allow_lossy_keys, fold_keys=not args.no_fold,
               max_lanes=args.max_lanes, source=args.source or "osu")

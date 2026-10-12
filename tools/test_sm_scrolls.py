@@ -258,6 +258,147 @@ def test_sanitized_id_collision_detected():
         assert list((d / "c").glob("*.json")) == [], "rolled back"
 
 
+SSC3A = """#TITLE:Three Diff;
+#ARTIST:A;
+#OFFSET:0;
+#BPMS:0.000=120.000;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Easy;
+#METER:2;
+#NOTES:
+0001
+0000;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Medium;
+#METER:4;
+#NOTES:
+0001
+0010;
+"""
+
+SSC3B = """#TITLE:Three Diff;
+#ARTIST:A;
+#OFFSET:0;
+#BPMS:0.000=120.000;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Hard;
+#METER:7;
+#NOTES:
+1000
+0100
+0010;
+"""
+
+SSC_HARD_ONLY = """#TITLE:Two Diff;
+#ARTIST:A;
+#OFFSET:0.0;
+#BPMS:0.000=100.000;
+#SCROLLS:0.000=9.000;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Hard;
+#METER:8;
+#SCROLLS:0.000=2.000;
+#SPEEDS:0.000=1.000,0.000,0;
+#NOTES:
+1000
+0000,
+0000
+0000;
+"""
+
+GROW1 = """#TITLE:Growing;
+#ARTIST:A;
+#OFFSET:0;
+#BPMS:0.000=120.000;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Easy;
+#METER:2;
+#NOTES:
+0001
+0000;
+"""
+
+GROW2 = """#TITLE:Growing;
+#ARTIST:A;
+#OFFSET:0;
+#BPMS:0.000=120.000;
+#STEPSTYPE:dance-single;
+#DIFFICULTY:Medium;
+#METER:4;
+#NOTES:
+0001
+0010;
+"""
+
+
+def run_sm(inp, d):
+    argv = ["sm2gakuran.py", str(inp), "--charts-dir", str(d / "c"),
+            "--audio-dir", str(d / "a"), "--assets-dir", str(d / "s")]
+    old = sys.argv
+    sys.argv = argv
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = S.main()
+    finally:
+        sys.argv = old
+    return rc, out.getvalue(), err.getvalue()
+
+
+def snap_jsons(d):
+    return {p.name: p.read_bytes() for p in sorted((d / "c").glob("*.json"))}
+
+
+def test_partial_rerun_preserves_saved_rank():
+    # Policy (b): rerunning Hard alone must not rewrite its saved rank 2.
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        (d / "full.ssc").write_text(SSC2, encoding="utf-8")
+        assert run_sm(d / "full.ssc", d)[0] == 0
+        before = snap_jsons(d)
+        assert json.loads(before["two_diff_hard.json"].decode("utf-8"))["rank"] == 2
+        (d / "hard.ssc").write_text(SSC_HARD_ONLY, encoding="utf-8")
+        (d / "full.ssc").unlink()
+        rc, _, err = run_sm(d / "hard.ssc", d)
+        assert rc == 0, err
+        assert "batch aborted" not in err, err
+        assert snap_jsons(d) == before, "partial rerun rewrote ranked files"
+
+
+def test_two_of_three_counts_partial():
+    # Two files, one song: full batch ranks 1-2-3; the two-diff file alone
+    # is partial and must leave both saved files byte-identical.
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        (d / "em.ssc").write_text(SSC3A, encoding="utf-8")
+        (d / "h.ssc").write_text(SSC3B, encoding="utf-8")
+        assert run_sm(d, d)[0] == 0
+        before = snap_jsons(d)
+        assert len(before) == 3, sorted(before)
+        (d / "h.ssc").unlink()
+        rc, _, err = run_sm(d / "em.ssc", d)
+        assert rc == 0, err
+        assert snap_jsons(d) == before, "partial rerun rewrote ranked files"
+
+
+def test_new_difficulty_partial_warns_provisional():
+    # A new difficulty in a partial run keeps its provisional rank-1 file and
+    # warns loudly; the existing sibling is untouched.
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        (d / "e.ssc").write_text(GROW1, encoding="utf-8")
+        assert run_sm(d / "e.ssc", d)[0] == 0
+        easy_before = (d / "c" / "growing_easy.json").read_bytes()
+        (d / "e.ssc").unlink()
+        (d / "m.ssc").write_text(GROW2, encoding="utf-8")
+        rc, _, err = run_sm(d / "m.ssc", d)
+        assert rc == 0, err
+        assert "provisional" in err and "full-song" in err, err
+        assert (d / "c" / "growing_easy.json").read_bytes() == easy_before
+        med = json.loads((d / "c" / "growing_medium.json").read_bytes().decode("utf-8"))
+        assert med["rank"] == 1, med["rank"]
+
+
 def test_full_cli_rerun_multi_difficulty_idempotent():
     # AUDIT P1-2: rank is assigned AFTER writing (assign_ranks rewrites the
     # files), so a rerun constructs rank=1 where the saved files carry final

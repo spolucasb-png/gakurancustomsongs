@@ -377,7 +377,7 @@ def main():
     sm_files = (sorted(p for p in args.input.rglob("*") if p.is_file()
                       and p.suffix.lower() in {".sm", ".ssc"})
                 if args.input.is_dir() else [args.input])
-    begin_batch()
+    begin_batch(args.charts_dir)
     results = []
     for sm in sm_files:
         results.extend(convert_file(sm, args.charts_dir, args.audio_dir,

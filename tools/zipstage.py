@@ -23,6 +23,28 @@ def safe_extract(zf: zipfile.ZipFile, dest: Path) -> int:
     """
     dest = dest.resolve()
     seen = set()
+    # File/directory structural conflicts (a file "a" alongside "a/x.osu")
+    # are refused up front: extraction order would otherwise decide between
+    # a mkdir/open crash. Comparison is normcase'd so case-only variants
+    # collide on case-insensitive filesystems too. Directory markers ("a/")
+    # with content under them are normal and pass; only a FILE member
+    # prefixing another member fails.
+    flat = [(info.filename.replace("\\", "/")) for info in zf.infolist()]
+
+    def _key(n):
+        # normcase folds case on case-insensitive filesystems; the separator
+        # is re-unified to "/" afterwards because normcase emits os.sep
+        # (backslash on Windows), which would defeat the prefix walk below.
+        return os.path.normcase(n).replace(os.sep, "/")
+
+    files = {_key(n.rstrip("/")) for n in flat if n and not n.endswith("/")}
+    for n in sorted(files):
+        parent, sep, _ = n.rpartition("/")
+        while sep:
+            if parent in files:
+                raise ValueError(
+                    f"conflicting archive members (file/directory): {parent!r} vs {n!r}")
+            parent, sep, _ = parent.rpartition("/")
     count = 0
     for info in zf.infolist():
         name = info.filename.replace("\\", "/")

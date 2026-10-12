@@ -115,6 +115,41 @@ def corrupt_payload(data: bytes, needle: bytes) -> bytes:
     return data[:i] + bytes([data[i] ^ 0x01]) + data[i + 1:]
 
 
+def test_file_directory_conflicts_refused_both_formats():
+    # A file member prefixing another member's directory ("a" + "a/x.osu")
+    # must skip cleanly, not crash in mkdir/open; staging temp cleans itself.
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        with zipfile.ZipFile(d / "conf.osz", "w") as zf:
+            zf.writestr("a", b"plain file, not a chart")
+            zf.writestr("a/song.osu", OSU_MIN)
+        with zipfile.ZipFile(d / "conf.qp", "w") as zf:
+            zf.writestr("q", b"plain file, not a chart")
+            zf.writestr("q/m.qua", QUA)
+        before = snapshot(d)
+        for arch in ("conf.osz", "conf.qp"):
+            rc, _, err = run_frontend(d / arch, d)
+            assert rc == 1, (arch, rc)
+            assert "conflicting archive members" in err, (arch, err)
+        assert snapshot(d) == before, "conflict run left output behind"
+
+
+def test_explicit_dir_markers_with_content_pass():
+    # A directory marker ("sub/") with content under it is normal archival
+    # practice, not a conflict: extraction succeeds.
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        zp = d / "dirs.zip"
+        with zipfile.ZipFile(zp, "w") as zf:
+            zf.writestr("sub/", "")
+            zf.writestr("sub/x.osu", OSU_MIN)
+        dest = d / "stage"
+        dest.mkdir()
+        with zipfile.ZipFile(zp) as zf:
+            assert safe_extract(zf, dest) == 1
+        assert (dest / "sub" / "x.osu").exists()
+
+
 def test_crc_corrupt_archives_skip_cleanly_both_formats():
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
@@ -334,6 +369,41 @@ def test_rollback_failures_are_reported():
             O.WRITTEN_CHARTS.clear()
             O.ROLLBACK_ERRORS.clear()
     assert "could not delete" in err.getvalue(), err.getvalue()
+
+
+def test_malformed_existing_json_refuses_and_rolls_back():
+    # AUDIT P1 (follow-up): a pre-existing destination holding `[]` is valid
+    # JSON but not an object — .items() would raise AttributeError past the
+    # old ValueError-only handler. It must refuse + roll back instead.
+    _malformed_victim_case(b"[]")
+
+
+def test_invalid_utf8_existing_json_refuses_and_rolls_back():
+    # Same path via undecodable bytes (UnicodeDecodeError is a ValueError,
+    # not an OSError, so the old read handler missed it too).
+    _malformed_victim_case(b"\xff\xfe{\x00bad")
+
+
+def _malformed_victim_case(victim_bytes):
+    sm_good = (SM_A.replace("#TITLE:Same Song;", "#TITLE:Good Song;")
+                     .replace("#OFFSET:0;", "#OFFSET:0;\n#MUSIC:g.mp3;"))
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        src = d / "src"
+        src.mkdir()
+        (src / "g.mp3").write_bytes(b"fake-audio-good")
+        (src / "a_good.sm").write_text(sm_good, encoding="utf-8")
+        (src / "b_twin.sm").write_text(SM_B, encoding="utf-8")
+        (d / "c").mkdir(parents=True, exist_ok=True)
+        victim = d / "c" / "same_song_hard.json"
+        victim.write_bytes(victim_bytes)
+        rc, _, err = run_frontend(src, d)
+        assert rc == 1, rc
+        assert "refusing to overwrite" in err and "batch aborted" in err, err
+        assert victim.read_bytes() == victim_bytes, "victim damaged"
+        assert sorted(p.name for p in (d / "c").glob("*")) == ["same_song_hard.json"]
+        aud = list((d / "a").glob("*")) if (d / "a").is_dir() else []
+        assert aud == [], [p.name for p in aud]
 
 
 def test_existing_file_collision_preserved_byte_for_byte():

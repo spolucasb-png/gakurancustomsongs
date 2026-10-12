@@ -272,7 +272,7 @@ def main():
     kw = dict(max_lanes=args.max_lanes, no_fold=args.no_fold,
               source=args.source or "quaver")
     inp = args.input
-    begin_batch()
+    begin_batch(args.charts_dir)
     results = []
     if inp.suffix.lower() == ".qp":
         results = convert_qp(inp, args.charts_dir, args.audio_dir, args.assets_dir, **kw)
