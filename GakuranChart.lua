@@ -1,5 +1,5 @@
 --[[
-    GakuranChart v2.0.30
+    GakuranChart v2.0.31
     Custom chart system for the (学乱) Gakuran rhythm minigame.
     Revival/remake of FunkyChart v1.23 (by accountrevived) for a different game.
 
@@ -25,7 +25,7 @@ local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
-local VERSION = "2.0.30"
+local VERSION = "2.0.31"
 local FOLDER = "GakuranCharts"
 local CHARTS_DIR = FOLDER .. "/Charts"
 local AUDIO_DIR = FOLDER .. "/Audio"
@@ -1543,6 +1543,17 @@ local function starRating(chart)
     return s
 end
 
+-- Star label for a chart's wheel data ("★4.61"): the same overwrite
+-- injectSingle applies at injection time. Direct plays rebuild the song
+-- object via buildGameSong (raw difficulty name) and re-inject it, so both
+-- play paths must re-apply the label or the wheel row loses its badge
+-- (crystallized showed HARD after a loader-UI play).
+local function starDifficulty(song, chart)
+    pcall(function()
+        song.difficulty = { [chart.mode] = ("★%.2f"):format(starRating(chart)) }
+    end)
+end
+
 local function diffName(chart)
     local d = type(chart.difficulty) == "table" and chart.difficulty[chart.mode] or nil
     return type(d) == "string" and d ~= "" and d or "Custom"
@@ -1559,9 +1570,7 @@ local function injectAllCharts()
             -- A single-difficulty custom song gets a star badge ("★5.32")
             -- in the wheel row, like the game's own songs get their tier
             -- badge; HK.makeDiffKey gives it the matching tier colour.
-            pcall(function()
-                song.difficulty = { [chart.mode] = ("★%.2f"):format(starRating(chart)) }
-            end)
+            starDifficulty(song, chart)
             pcall(injectSong, song)
             count += 1
         end
@@ -2988,6 +2997,9 @@ local function playChart()
         notify("Audio error", err, true)
         return
     end
+    -- A direct play rebuilds + re-injects the song object: re-apply the star
+    -- badge or the wheel row keeps the raw difficulty name (crystallized/HARD).
+    starDifficulty(song, currentChart)
 
     local okA, attrErr = saveAndSetAttributes(currentChart.mode)
     if not okA then
@@ -3161,6 +3173,10 @@ local function pickDifficultyInner(parent, d, state)
     end
     local song = parent.song
     for _, k in ipairs(SWAP_FIELDS) do song[k] = fresh[k] end
+    -- the swap above carries the raw diff name; the parent row keeps its
+    -- "N diffs" label (same table it started with). Guarded: a nil label
+    -- must never reach the wheel skin.
+    if type(parent.label) == "table" then song.difficulty = parent.label end
     customCharts[parent.id] = chart   -- the SV model is built from this
     stopSv()
     pcall(function() service._carryOverStats = nil end)   -- no score carry-over

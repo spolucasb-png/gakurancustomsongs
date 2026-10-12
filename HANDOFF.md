@@ -19,6 +19,13 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
+### Session 26 (2026-10-12): crystallized HARD badge — ROOT CAUSE FOUND + FIXED in loader v2.0.31 (init-path verified live, direct-play path pending user check)
+- Screenshot showed the WHEEL badge (not picker) reading raw HARD — real defect. Ledger proof: injected song object carried `difficulty="Hard"` while April's carried `"★4.03"`; chart data verified perfect live (mode/notes/duration all correct, ★4.61 computes).
+- Root cause: `playChart()` (loader-UI direct plays) rebuilds via `buildGameSong` (raw name) and re-injects, clobbering the starred row — crystallized was started from the loader UI, April from the wheel (wheel plays never rebuild). Same bug class in the picker path: SWAP_FIELDS carries raw `difficulty` into the parent song, clobbering its "N diffs" label.
+- Fix (loader only, converter freeze untouched): new `starDifficulty(song, chart)` helper (same overwrite injectSingle used); called in `playChart` after build; picker path restores `parent.label` (nil-guarded) instead. VERSION 2.0.30 -> 2.0.31 (constant + header).
+- Deployed: repo file copied to workspace executor copy (sha-verified identical), executed via run_executor_file, `gen=2 version=2.0.31`, ledger re-read: crystallized row now `★4.61`. Init path VERIFIED live.
+- PENDING: direct-play path needs a loader-UI play of crystallized + badge/ledger re-check (needs user UI interaction; I cannot set currentChart). No scores involved.
+
 ### Session 25 (2026-10-12): 3 more Etterna SV maps added (user request, deployed)
 - Picks (explicit `.ssc` paths, unified frontend, scratch-first): crystallized (2071 notes, 174 BPM, 12 SV: 0.75→1.0 ramp, 1 BPM seg), GO 4 IT (4481 notes, 172 BPM, 10 SV: 1.0→0.1 staircase, 1 seg), Chesire,s dance (2382 notes, 120 BPM, 4 SV: 10x spike + 0.3 dip, 7 BPM segs — MULTI-BPM caveat applies, flagged not blocking).
 - Source OFFSETs passed through verbatim (not a defect): crystallized -3487 ms, go4it +954 ms, chesire +1776 ms. If any chart feels globally off-sync in playtest, OFFSET is the named suspect — it's pack data, converter doesn't touch it.
