@@ -15,6 +15,12 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
+### Session 17 (2026-10-12): zero-SV fix LIVE-VERIFIED by user, item 13 CLOSED
+- User fixed the client and confirmed in-game: pauses/teleports on the reconverted charts now match Quaver ("IT TOOK ALL THE DAMN DAY TO MAKE THIS WORK, im super happy"). Per the standing decision, user eyeball is the final authority on feel — item 13 is CLOSED. Honest scope note: this verification is user-side gameplay, NOT my sampler run (no evals ran after the rejoin except `runtime_status`; the earlier queue wedge was never re-probed — do not cite sampler numbers for this turn).
+- Root-cause record: converter missing-`Multiplier` default 1.0 (not the renderer). The session-15 "killed theories" work stands as renderer-healthy evidence — the renderer was never at fault. Session-16 line "Live verification BLOCKED" below is now superseded.
+- No code changed this turn (docs only); tree was clean at `4deb590` on entry.
+- Next: parked items unchanged (single-difficulty star badge, DiffTier-nil probe, `GC_simref` cleanup, display-displacement clamp unfaithful-by-design, Real inspection-only).
+
 ### Session 16 (2026-10-12): missing-Multiplier=0 pause bug (external report + fix)
 - External analysis received: `.qua` SV entries with NO `Multiplier` field default to rate 0 in Quaver (uninitialized C# `float` = 0.0f; gameplay treats 0 as "staying"), but `qua2gakuran.py` used `fnum(..., 1.0)` — turning stops into normal scrolling. Files: candidate chart + patch in `C:\Users\Administrator\Downloads\` (do NOT `git apply` the patch: hunk 1 is already present here with identical semantics, hunk 2 needed a blank-line adaptation; do NOT copy the candidate into any chart folder — same song ID).
 - Verified from the raw sources with the proven parser (not trusted blindly): ball_hard 335 omissions (exact times match the report: 4711, 4865.015625, ...), bozo 631, halloween 7; C# default + gameplay "staying" use confirm 0 semantics. CORRECTION to my own session-10 census ("zero: 0"): wrong — the same 1.0 default masked them. The "no pauses" census conclusion is retracted for Quaver charts.

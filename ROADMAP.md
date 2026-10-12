@@ -431,7 +431,7 @@ parent rows and submenu (A2/A3) and is untouched.
   the 4 Quaver charts (ball_hard x2, bozo, halloween) with backups, offline sim
   on the new JSON, live sampler on the playing client (expect >=99.9% within
   1 px), scores cleared. Scratch + sampler in `_gk_patch/` (see HANDOFF).
-- [x] Missing-Multiplier=0 fix (session 16, external report verified): omitted `Multiplier` = rate 0 in Quaver (335 ball_hard / 631 bozo / 7 halloween); converter default 1.0→0.0, regression test added (8/8 green), charts reconverted (ball 8723, bozo 9228, halloween 13985; non-SV identical; output matches the external candidate exactly), deployed with backup. Live verification pending client rejoin (eval queue wedged by a getgc-heavy probe — no more scans until then).
+- [x] Missing-Multiplier=0 fix (session 16, external report verified): omitted `Multiplier` = rate 0 in Quaver (335 ball_hard / 631 bozo / 7 halloween); converter default 1.0→0.0, regression test added (8/8 green), charts reconverted (ball 8723, bozo 9228, halloween 13985; non-SV identical; output matches the external candidate exactly), deployed with backup. LIVE-VERIFIED 2026-10-12 by user in-game (pauses/teleports match Quaver; user eyeball = final authority per standing decision).
 
 ## Later / future add-ons
 
@@ -448,7 +448,8 @@ The plan is now the parent-row + wheel difficulty submenu design in "Current foc
 - [ ] Playlist / queue / shuffle.
 - [ ] Practice mode: start from a timestamp, loop a section, no-fail. Speed rate depends on how the engine reads the audio clock, so check that first.
 
-### 13. Notes do not render during pause sections (user report 2026-10-11) - REOPENED 2026-10-12 (was: closed, faithful-by-design)
+### 13. Notes do not render during pause sections (user report 2026-10-11) - CLOSED 2026-10-12 (root cause: converter missing-Multiplier default; user-verified live)
+- [x] CLOSED (session 17): root cause was the Quaver converter (`fnum(..., 1.0)` turned 335/631/7 authored stops into normal scrolling), NOT the renderer. Fixed (default 0.0 + regression test, 8/8), charts reconverted (ball 8723, bozo 9228), user confirmed pauses/teleports match Quaver in-game. The session-15 killed-theories work stands as renderer-healthy evidence.
 - [ ] REOPENED 2026-10-12 by the user's correction: in Quaver the notes STOP and teleport to the receptors in beat, in the port they keep scrolling and teleport badly, so "full SV preservation" is NOT 100% Quaver. The verdict below only proved drawn positions equal the integral of the .qua SV for notes that exist. Hypotheses (visibility completeness vs time-gated spawn, clock/sampling, Quaver position math, note release) and the plan are in HANDOFF.md, section "REOPENED (session 14)". No code changed yet. Do not trust the lines below as proof of Quaver parity.
 - [x] Investigated live (client 13984, ball_hard, deployed v2.0.30): every in-window note has an instance in all samples, cursor advances at density, spawnCapped=0, errors=0 — spawn path healthy. The "pauses" are the map's authored ±4.4M teleports (±132,000px flings, e.g. −69 scroll-sec at 20.403s) and 20s/15s/12s negative runs; the loader integral matches a from-source Quaver reference, and 10-decimal beats are ruled out (strictly increasing, 0 dups). Same thing renders in real Quaver. Details in HANDOFF.md ("NEXT TASK (session 13)"). Optional, not built: display-displacement clamp (unfaithful, on request only).
 - [ ] Parked: single-difficulty star badge for custom songs (redo on current `GakuranChart.lua`; `GakuranChart_v2.0.10.lua` is a stale untracked draft, do not reuse blindly).
