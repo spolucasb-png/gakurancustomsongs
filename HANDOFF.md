@@ -113,6 +113,43 @@ do not re-run blindly): `C:\Users\Administrator\_gk_patch\qua_sv_stats.py`
   v2.0.30, workspace == repo. Remaining: user eyeball vs real Quaver motion
   (only a human can judge feel); full-negative loader redesign is DONE here,
   no follow-up coded.
+- [!] CORRECTION (session 11, ~21:20, client 13984 after a PC restart, loader
+  v2.0.30): the claim above that the math now matches Quaver "point for point"
+  is FALSE for ball_hard. I played the full chart (user request: "does it match
+  the real quaver file?") with a per-frame sampler comparing the DRAWN note-Y
+  differences against the integral of the ORIGINAL .qua SV: 107,675 note-pair
+  samples, only 17.3% within 1 px, 22.9% within 3 px, 37,756 samples >50 px,
+  max 340,792 px at t=10.07 s. 0 sampler/SV/vis errors, model 8,593 pts,
+  hooks 14/14. The sampler is sound: the same model built OFFLINE from the
+  chart JSON (no game) reproduces it (10.9% within 1 px, p90 131,237 px).
+- ROOT CAUSE (verified offline): TIME QUANTIZATION in the converter. Beats are
+  stored as round(t_ms / ref_bl, 4) = steps of 0.0308 ms (max error 0.0154 ms),
+  but ball_hard's 170 teleport spikes are exactly 0.0156 ms (1/64 ms) wide.
+  Example, source: 4864.9844 ms +9856, 4865.0000 ms -9856, 4865.0156 ms 1.0
+  (net 0). Ours: +9856 held 0.0308 ms then 1.0 (the -9856 point collapses into
+  a neighbouring grid instant) = a permanent +0.3033 scroll-second offset; the
+  integral offset at song end is -574 scroll-seconds (4 decimals). NOTE TIMES
+  matter too: notes sit inside spike windows (rate 9856 x 0.015 ms = 0.15
+  scroll-s = ~280 px). Rates rounded to 4 decimals are harmless.
+- Offline fix experiment (same 4,352 samples, S=1920; `qua_sv_sim4.py`):
+  SV 4 dec / notes 4 dec 12.0% within 1 px | SV 12 dec / notes 4 dec 71.4% |
+  SV 8 / notes 8: 96.6% (max 3.3 px) | SV 10 / notes 10: 100% (max 0.5 px) |
+  12 / 12: 100% (0 px), end-of-song offset 5e-5 scroll-s.
+- FIX PLAN (NOT applied, awaiting user go-ahead; converter-only, no loader
+  change, no version bump): in `tools/qua2gakuran.py` store note beats, hold
+  lengths and scrollChanges beats with 10 decimals instead of 4 (osu path
+  untouched: its SV times are integer ms). The same-grid collapse then only
+  merges genuinely identical times. Re-convert ball_hard (+ bozo and any other
+  quaver SV chart) with backups, then verify with the sampler (expect >=99.9%
+  within 1 px, 0 px >50) and `qua_sv_sim4.py`. Chart JSON grows a little.
+- Scratch files (outside the repo, in `C:\Users\Administrator\_gk_patch\`):
+  `export_ref.py` (writes `Workspace\GC_simref\ballhard_ref.json`),
+  `qua_sv_sim2.py` / `3.py` / `4.py` (offline comparisons / divergence finder /
+  precision sweep), `sv_live_sampler.luau` (the live sampler; header explains
+  how to run it). The workspace folder `GC_simref` is reference data only, safe
+  to delete after the fix is verified.
+- Test hygiene: my play wrote a 0-score row for ball_hard_sv_ballin; removed
+  with `clearScores("ball_hard_sv_ballin")` (Scores.json had no other rows).
 
 ### DONE (session 9): hit flash / hit ring orientation fixed in v2.0.29 (user approved 15:57)
 No current task is open from this session. DEPLOYED v2.0.29, workspace == repo.
