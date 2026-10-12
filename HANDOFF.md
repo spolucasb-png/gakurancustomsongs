@@ -25,6 +25,7 @@ committed is lost. So:
 - Fix (loader only, converter freeze untouched): new `starDifficulty(song, chart)` helper (same overwrite injectSingle used); called in `playChart` after build; picker path restores `parent.label` (nil-guarded) instead. VERSION 2.0.30 -> 2.0.31 (constant + header).
 - Deployed: repo file copied to workspace executor copy (sha-verified identical), executed via run_executor_file, `gen=2 version=2.0.31`, ledger re-read: crystallized row now `★4.61`. Init path VERIFIED live.
 - PENDING: direct-play path needs a loader-UI play of crystallized + badge/ledger re-check (needs user UI interaction; I cannot set currentChart). No scores involved.
+- VERIFIED by user (session 26): loader-UI play leaves the badge intact, no problems. Direct-play path closed; v2.0.31 fully live-verified.
 
 ### Session 25 (2026-10-12): 3 more Etterna SV maps added (user request, deployed)
 - Picks (explicit `.ssc` paths, unified frontend, scratch-first): crystallized (2071 notes, 174 BPM, 12 SV: 0.75→1.0 ramp, 1 BPM seg), GO 4 IT (4481 notes, 172 BPM, 10 SV: 1.0→0.1 staircase, 1 seg), Chesire,s dance (2382 notes, 120 BPM, 4 SV: 10x spike + 0.3 dip, 7 BPM segs — MULTI-BPM caveat applies, flagged not blocking).
