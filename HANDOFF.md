@@ -1,5 +1,7 @@
 # Handoff (for the next chat session)
 
+## Standing constraint (agreed session 23): the verified `.ssc` conversion path stays UNCHANGED until gameplay evidence shows a defect. New tests (synthetic stops/reverses, multi-BPM) observe first, change code only with a failing measurement in hand.
+
 ## READ FIRST: work-in-progress log + save protocol
 **Instruction to every AI session working in this repo: keep this section
 current as you go, not at the end.** Sessions can be cut off at any moment
