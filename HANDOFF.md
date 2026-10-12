@@ -15,6 +15,12 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
+### Session 21 (2026-10-12): April Showers controlled-test staged (convert + isolated overlay)
+- Followed the approved procedure steps 1-2: converted via the UNIFIED frontend on the explicit `.ssc` path (1 chart only — the `.sm` twin untouched, no collision): 809 notes, 158 BPM, offset -117ms, 16 SV verbatim, rates {0.2, 0.75, 1.0, 3.0}.
+- Collision check: no `*april*` in the 36-chart Madium workspace — clean. Staged a drop-in overlay at `Referencesandmods\\_scratch_convert\\april_test_workspace\\GakuranCharts\\{Charts,Audio,Assets}` (single JSON + mp3 + jpg); known-good workspace untouched. To deploy: copy the overlay's `GakuranCharts/*` over the workspace root.
+- Playtest timestamps for the user (158 BPM): wobble beats 113.5-115 -> song ~43.1-43.7s (0.2<->3.0); dip beat 242-244 -> ~91.9-92.7s (0.75). Compare those windows in Etterna vs Gakuran; record timing/position diffs BEFORE any code change.
+- Step 3 (live play) is the user's — NOT done this turn, no evals ran.
+
 ### Session 20 (2026-10-12): review verdict on 7abc34b = PASS for controlled testing (docs only)
 - Reviewer confirms all 3 prior findings fixed (unified frontend, per-chart timing, NOTES2); did not execute the suite locally. Verdict: ready for a controlled single-BPM test, not proof of full SSC fidelity.
 - Concern 1 (NOTEDATA timing before STEPSTYPE) checked against all 9 local `.ssc`: every file has exactly one EMPTY `#NOTEDATA:;` + one `#STEPSTYPE`; all timing lives in the true global header; zero files place timing between NOTEDATA and STEPSTYPE. Tracked as future hardening ("eventually parse NOTEDATA sections as chart boundaries"), NOT implemented — reviewer said "eventually", verdict is pass, no local trigger.
