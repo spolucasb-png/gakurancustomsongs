@@ -15,6 +15,10 @@ committed is lost. So:
    "Current task". Tell the next AI to keep doing the same.
 5. Never claim something works unless it was run; mark untested items as untested.
 
+### Session 22 (2026-10-12): April Showers LIVE-VERIFIED by user ("same as same")
+- User playtested Etterna vs Gakuran: scroll-rate behavior matches. Rate-variation fidelity on a single-BPM `.ssc` chart is VERIFIED by user eyeball (final authority). Scope honesty preserved: this says nothing about stops/reverses — zero/negative scrolls still untested anywhere (no local chart has them; synthetic chart remains the next step if wanted).
+- No code changed this turn (docs only). No scores involved (user playtest, not a staged probe).
+
 ### Session 21 (2026-10-12): April Showers controlled-test staged (convert + isolated overlay)
 - Followed the approved procedure steps 1-2: converted via the UNIFIED frontend on the explicit `.ssc` path (1 chart only — the `.sm` twin untouched, no collision): 809 notes, 158 BPM, offset -117ms, 16 SV verbatim, rates {0.2, 0.75, 1.0, 3.0}.
 - Collision check: no `*april*` in the 36-chart Madium workspace — clean. Staged a drop-in overlay at `Referencesandmods\\_scratch_convert\\april_test_workspace\\GakuranCharts\\{Charts,Audio,Assets}` (single JSON + mp3 + jpg); known-good workspace untouched. To deploy: copy the overlay's `GakuranCharts/*` over the workspace root.
